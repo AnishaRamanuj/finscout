@@ -1,10 +1,9 @@
-"""Portfolio Copilot — Claude Opus 5.5 answers questions about your holdings."""
-from anthropic import Anthropic
-from app.config import settings
+"""Portfolio Copilot — answers questions about the user's holdings."""
+from app.llm import get_llm
+from app.llm.base import CompletionRequest
 
-_client = Anthropic(api_key=settings.anthropic_api_key) if settings.anthropic_api_key else None
 
-SYSTEM_PROMPT = """You are a personal equity research analyst for an individual investor's own portfolio.
+SYSTEM = """You are a personal equity research analyst for an individual investor's portfolio.
 
 Rules:
 - Answer with specific evidence from the data provided.
@@ -16,18 +15,13 @@ Rules:
 
 
 def answer_portfolio_question(portfolio_context: str, question: str) -> str:
-    if not _client:
-        return "Set ANTHROPIC_API_KEY in .env to use the Copilot."
-
-    resp = _client.messages.create(
-        model=settings.model_reasoning,
-        max_tokens=1200,
-        thinking={"type": "enabled", "budget_tokens": 4000},
-        system=SYSTEM_PROMPT,
-        messages=[{
-            "role": "user",
-            "content": f"PORTFOLIO:\n{portfolio_context}\n\nQUESTION: {question}",
-        }],
-    )
-    text_blocks = [b.text for b in resp.content if hasattr(b, "text")]
-    return "\n".join(text_blocks).strip()
+    user = f"PORTFOLIO:\n{portfolio_context}\n\nQUESTION: {question}"
+    try:
+        return get_llm().reasoning(CompletionRequest(
+            system=SYSTEM,
+            user=user,
+            max_tokens=1200,
+            extended_thinking=True,
+        ))
+    except Exception as e:
+        return f"(LLM unavailable: {e})"

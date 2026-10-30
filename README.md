@@ -1,38 +1,66 @@
 # FinScout
 
-AI-powered stock discovery engine. Beats Screener.in by being proactive — it tells you *which* companies to look at, with plain-English explanations, instead of making you build queries.
+AI-powered stock discovery engine. Beats Screener.in by being **proactive** — it tells you *which* companies to look at, with plain-English explanations, instead of making you build queries.
 
 Three tabs:
 1. **Discover** — AI-curated weekly picks ranked by a 7-factor composite score
-2. **My Portfolio** — upload your holdings, ask Claude questions about them
+2. **My Portfolio** — upload your holdings, ask the AI questions about them
 3. **Deep Dive** — any ticker, full breakdown with AI explanations
 
 ---
 
-## How AI Is Used
+## Pick Your LLM (one line in `.env`)
 
-| Model | Where it's used | Why this model |
+FinScout works with two backends. Flip one env var to switch — no code changes needed.
+
+```bash
+LLM_PROVIDER=anthropic   # Claude Opus 5.5 + Haiku 5.5 — best quality, ~$28/mo
+LLM_PROVIDER=ollama      # Local models via Ollama — free, offline, slower
+```
+
+### Option 1 — Claude (default, recommended)
+
+| Model | Where it's used | Why |
 |---|---|---|
-| **`claude-opus-5-5`** (reasoning) | • "Why Now" paragraphs on the Discover feed<br>• Portfolio Copilot (`"which holding looks weakest?"`)<br>• Deep Dive AI summaries | Best Claude for financial reasoning. Uses **extended thinking** (10K-token budget) so it can actually weigh evidence like a human analyst. ~$15/M input, ~$75/M output. |
-| **`claude-haiku-5-5`** (fast + cheap) | • News sentiment scoring (500+ companies × daily)<br>• One-line ratio explanations<br>• Light triage tasks | 10x cheaper, 3x faster. Perfect for high-volume classification where you don't need deep reasoning. |
+| **`claude-opus-5-5`** | "Why Now" paragraphs on Discover feed · Portfolio Copilot · Deep Dive summaries | Best model for financial reasoning. Uses **extended thinking** (10K-token budget) to weigh evidence like a real analyst. |
+| **`claude-haiku-5-5`** | News sentiment scoring (100s of headlines daily) · One-line ratio explanations | 10× cheaper, 3× faster. Perfect for high-volume work. |
 
-### Where Claude is called
+**Monthly cost (personal use, ~30 picks curated weekly):** ~$28, or ~$15 with prompt caching.
 
-- `app/agents/why_now.py` → Opus 5.5 generates the "Why Now" blurb per pick
-- `app/agents/copilot.py` → Opus 5.5 answers portfolio questions with extended thinking
-- `app/agents/explainer.py` → Haiku 5.5 explains any ratio in one sentence
-- `app/scoring/sentiment.py` → Haiku 5.5 rates headlines 0–100 at scale
+### Option 2 — Ollama (free, local, offline)
 
-### Cost per month (personal use, ~30 picks curated weekly)
+Install Ollama once:
 
-| Item | Monthly |
-|---|---|
-| Opus 5.5 (Why Now + Copilot) | ~$20 |
-| Haiku 5.5 (sentiment × 100 companies × 30 days) | ~$8 |
-| Everything else (yfinance, Finnhub free, NSE data) | $0 |
-| **Total** | **~$28/month** |
+```bash
+# macOS
+brew install ollama
 
-Turn on prompt caching to drop this to **~$15/month**.
+# or download the installer from https://ollama.com/download
+```
+
+Pull the models (one-time, ~10 GB download total):
+
+```bash
+ollama pull qwen2.5:14b     # reasoning model (needs ~10GB RAM)
+ollama pull llama3.2:3b     # fast model (needs ~3GB RAM)
+```
+
+Keep Ollama running in the background — FinScout talks to it on `http://localhost:11434`.
+
+**If you have less RAM**, use smaller models in `.env`:
+- `OLLAMA_REASONING_MODEL=qwen2.5:7b` (needs ~5GB)
+- `OLLAMA_FAST_MODEL=llama3.2:1b` (needs ~2GB)
+
+Monthly cost: **$0**. Quality is lower than Claude but fully private.
+
+### Where the LLM is called
+
+- [`app/agents/why_now.py`](app/agents/why_now.py) — reasoning tier
+- [`app/agents/copilot.py`](app/agents/copilot.py) — reasoning tier
+- [`app/agents/explainer.py`](app/agents/explainer.py) — fast tier
+- [`app/scoring/sentiment.py`](app/scoring/sentiment.py) — fast tier
+
+All of them go through [`app/llm/factory.py`](app/llm/factory.py), which picks the provider based on `LLM_PROVIDER` in `.env`.
 
 ---
 
@@ -44,29 +72,83 @@ finscout/
 │   ├── main.py              # Streamlit entry — three tabs
 │   ├── config.py            # loads .env
 │   ├── db.py                # Postgres + SQLAlchemy models
+│   ├── llm/                 # 🆕 LLM provider abstraction
+│   │   ├── base.py          #    common interface
+│   │   ├── anthropic_provider.py
+│   │   ├── ollama_provider.py
+│   │   └── factory.py       #    picks provider from .env
 │   ├── data/                # yfinance, Finnhub, NSE pullers
 │   ├── scoring/             # 7-factor composite score engine
-│   ├── agents/              # Claude agents (why_now, copilot, explainer)
-│   ├── ui/                  # Streamlit pages (discover, portfolio, deep_dive)
-│   └── jobs/                # Nightly cron + Monday feed curation
+│   ├── agents/              # Why-Now, Copilot, Explainer
+│   ├── ui/                  # Streamlit pages
+│   └── jobs/                # Nightly cron + Monday curation
 ├── Dockerfile
-├── docker-compose.yml       # app + scheduler + Postgres
+├── docker-compose.yml
 ├── requirements.txt
 └── .env.example
 ```
 
 ---
 
-## Setup (3 commands)
+## Fastest Path to Real Data (10 minutes)
 
-### 1. Clone & configure
+### Step 1 — Set up `.env`
 
 ```bash
+cd /Users/anisharamanuj/Downloads/finscout
 cp .env.example .env
-# edit .env — paste your Anthropic + Finnhub keys
 ```
 
-### 2. Launch everything with Docker
+Edit `.env`:
+- Set `LLM_PROVIDER=anthropic` (or `ollama` if you want free)
+- Paste your Anthropic key (if using Claude)
+- Paste your Finnhub key (free from https://finnhub.io/register)
+- For `.env` **inside Docker**, keep `POSTGRES_HOST=db`
+- For running locally **outside** Docker, change to `POSTGRES_HOST=localhost`
+
+### Step 2 — Start Postgres only (fastest)
+
+```bash
+docker compose up -d db
+```
+
+Takes ~15 seconds. Postgres is now running on `localhost:5432`.
+
+### Step 3 — Install Python deps locally
+
+```bash
+python3.12 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+### Step 4 — Pull data for 20 companies (smoke test)
+
+```bash
+POSTGRES_HOST=localhost python -m app.jobs.nightly 20
+```
+
+Takes ~3–5 minutes. Pulls financials, prices, news, and computes scores for the top 20 NSE companies.
+
+### Step 5 — Generate the AI "Why Now" picks
+
+```bash
+POSTGRES_HOST=localhost python -m app.jobs.monday_feed
+```
+
+Takes ~1 minute. Claude Opus writes a paragraph for the top 10.
+
+### Step 6 — Launch the UI
+
+```bash
+POSTGRES_HOST=localhost streamlit run app/main.py
+```
+
+Open **http://localhost:8501** → Discover tab shows your first real picks.
+
+---
+
+## Full Docker Launch (once everything works locally)
 
 ```bash
 docker compose up --build
@@ -74,26 +156,8 @@ docker compose up --build
 
 This starts:
 - **finscout-app** → Streamlit UI on http://localhost:8501
-- **finscout-scheduler** → runs nightly ingest + Monday curation
+- **finscout-scheduler** → runs nightly at 3 AM IST, Monday curation at 6 AM IST
 - **finscout-db** → Postgres + pgvector
-
-### 3. Prime the database (one-time)
-
-In a second terminal:
-
-```bash
-docker compose exec app python -m app.jobs.nightly 50
-```
-
-This pulls the top 50 NSE companies, scores them, and populates the DB. Takes ~15 minutes. Bump to `500` once you've validated.
-
-Then generate Monday picks:
-
-```bash
-docker compose exec app python -m app.jobs.monday_feed
-```
-
-Open http://localhost:8501 — the Discover tab is now populated.
 
 ---
 
@@ -107,11 +171,9 @@ Every company gets a 0–100 composite score, weighted blend of:
 | Profitability | 20% | ROCE and margin trend |
 | Momentum | 20% | 3-month price change |
 | Insider | 10% | Promoter buy/sell cluster |
-| Sentiment | 10% | Haiku 5.5 reads 30d of news |
+| Sentiment | 10% | LLM reads 30d of news |
 | Valuation | 10% | PE vs sector |
 | Quality | 5% | Debt/equity, interest coverage |
-
-The composite is the single number users see on the Discover feed.
 
 ---
 
@@ -120,10 +182,10 @@ The composite is the single number users see on the Discover feed.
 | Screener.in | FinScout |
 |---|---|
 | Blank query box — user must know what to search | **AI-curated weekly feed** |
-| Shows numbers only | **Every number has a 1-sentence AI explanation** |
-| Backward-looking ratios | **Includes news sentiment + momentum + insider signals** |
+| Shows numbers only | **Every number has an AI explanation** |
+| Backward-looking ratios | **News sentiment + momentum + insider signals** |
 | No portfolio intelligence | **Portfolio Copilot answers natural questions** |
-| Static announcement alerts | **AI anomaly detection** (margin compression, accruals, etc.) |
+| Static announcement alerts | **AI anomaly detection** |
 
 ---
 
@@ -134,33 +196,7 @@ The composite is the single number users see on the Discover feed.
 | **yfinance** | Prices, financials, insider trades for every public stock globally | Free |
 | **NSE archive CSV** | Full NSE ticker master list | Free |
 | **Finnhub** | Company news (90 days back) | Free: 60 calls/min |
-| **SEC EDGAR** (optional, US stocks) | 10-K/10-Q filings | Free |
-
----
-
-## Development
-
-### Run without Docker
-
-```bash
-python3.12 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-# Start Postgres however you like, then:
-streamlit run app/main.py
-```
-
-### Run just the nightly ingestion
-
-```bash
-python -m app.jobs.nightly 20   # top 20 companies, quick smoke test
-```
-
-### Run Monday curation
-
-```bash
-python -m app.jobs.monday_feed
-```
+| **SEC EDGAR** (optional, US) | 10-K/10-Q filings | Free |
 
 ---
 
@@ -169,9 +205,8 @@ python -m app.jobs.monday_feed
 - [ ] Natural language → SQL screen builder (`"small-caps growing 20%+ with no debt"`)
 - [ ] Earnings call transcript ingestion + Q&A
 - [ ] Peer comparison with sector median overlays
-- [ ] Scenario simulator (`"if rates drop 50bp, which of my holdings benefit?"`)
 - [ ] Email digest every Monday morning
-- [ ] Mobile-friendly Next.js replacement for Streamlit UI
+- [ ] Mobile-friendly Next.js UI
 
 ---
 
