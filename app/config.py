@@ -17,9 +17,7 @@ class Settings(BaseSettings):
     ollama_reasoning_model: str = "qwen2.5:14b"
     ollama_fast_model: str = "llama3.2:3b"
 
-    # Data sources
-    finnhub_api_key: str = ""
-    newsapi_key: str = ""
+    # Data sources (all free, no keys required for v1)
     sec_user_agent: str = "FinScout dev@finscout.local"
 
     # Postgres

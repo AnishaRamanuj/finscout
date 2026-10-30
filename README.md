@@ -77,7 +77,7 @@ finscout/
 │   │   ├── anthropic_provider.py
 │   │   ├── ollama_provider.py
 │   │   └── factory.py       #    picks provider from .env
-│   ├── data/                # yfinance, Finnhub, NSE pullers
+│   ├── data/                # yfinance + NSE pullers (all free, no keys)
 │   ├── scoring/             # 7-factor composite score engine
 │   ├── agents/              # Why-Now, Copilot, Explainer
 │   ├── ui/                  # Streamlit pages
@@ -101,8 +101,7 @@ cp .env.example .env
 
 Edit `.env`:
 - Set `LLM_PROVIDER=anthropic` (or `ollama` if you want free)
-- Paste your Anthropic key (if using Claude)
-- Paste your Finnhub key (free from https://finnhub.io/register)
+- Paste your Anthropic key (if using Claude) — that's the only key you need
 - For `.env` **inside Docker**, keep `POSTGRES_HOST=db`
 - For running locally **outside** Docker, change to `POSTGRES_HOST=localhost`
 
@@ -193,10 +192,12 @@ Every company gets a 0–100 composite score, weighted blend of:
 
 | Source | Covers | Cost |
 |---|---|---|
-| **yfinance** | Prices, financials, insider trades for every public stock globally | Free |
-| **NSE archive CSV** | Full NSE ticker master list | Free |
-| **Finnhub** | Company news (90 days back) | Free: 60 calls/min |
-| **SEC EDGAR** (optional, US) | 10-K/10-Q filings | Free |
+| **yfinance** | Prices, financials, **news headlines** for every public stock | Free, no key |
+| **NSE archive CSV** | Full NSE ticker master list | Free, no key |
+| **NSE bulk & block deals** | Daily high-conviction Indian trade disclosures (public filings) — powers the **Insider** score factor | Free, no key |
+| **SEC EDGAR** (optional, US) | 10-K/10-Q filings | Free, email in User-Agent |
+
+> **No Finnhub, no paid news API.** The only key FinScout needs is your Anthropic key (and even that is optional if you run Ollama).
 
 ---
 

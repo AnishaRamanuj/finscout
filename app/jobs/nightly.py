@@ -6,6 +6,7 @@ from app.config import settings
 from app.data.tickers import fetch_nse_tickers
 from app.data.financials import fetch_company_financials
 from app.data.news import fetch_news
+from app.data.nse_trades import fetch_trades_for_ticker
 from app.scoring.engine import compute_scores
 from app.db import SessionLocal, Company, Financials, Score, init_db
 
@@ -47,8 +48,9 @@ def run_nightly(limit: int = 100):
                 )
                 session.add(fin)
 
-                headlines = [n.get("headline", "") for n in fetch_news(row.ticker, days=14)]
-                scores_dict = compute_scores(row.ticker, data, headlines)
+                headlines = [n.get("headline", "") for n in fetch_news(row.yf_symbol, days=14)]
+                nse_trades = fetch_trades_for_ticker(row.ticker)
+                scores_dict = compute_scores(row.ticker, data, headlines, nse_trades)
 
                 score = session.get(Score, row.ticker) or Score(ticker=row.ticker)
                 for k, v in scores_dict.items():
