@@ -1,5 +1,15 @@
 """FinScout — Streamlit entry point."""
+import sys
+from pathlib import Path
+
+# Ensure the project root is importable when launched via `streamlit run app/main.py`
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 import streamlit as st
+
+from app.config import settings
 from app.ui import discover, portfolio, deep_dive
 from app.db import init_db
 
@@ -18,7 +28,10 @@ st.sidebar.caption("AI-powered stock discovery")
 tab = st.sidebar.radio("Navigate", ["Discover", "My Portfolio", "Deep Dive"])
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Powered by Claude Opus 5.5 + Haiku 5.5")
+if settings.llm_provider == "ollama":
+    st.sidebar.caption(f"Powered by Ollama · {settings.ollama_reasoning_model} + {settings.ollama_fast_model}")
+else:
+    st.sidebar.caption(f"Powered by {settings.model_reasoning} + {settings.model_fast}")
 
 if tab == "Discover":
     discover.render()
