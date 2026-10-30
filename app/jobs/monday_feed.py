@@ -41,7 +41,11 @@ def run_monday_curation(top_n: int = 10):
 
             try:
                 text = generate_why_now(company.ticker, company.name, score_breakdown, data)
-                s.add(WhyNow(ticker=company.ticker, text=text, model=settings.model_reasoning))
+                model_name = (
+                    settings.ollama_reasoning_model if settings.llm_provider == "ollama"
+                    else settings.model_reasoning
+                )
+                s.add(WhyNow(ticker=company.ticker, text=text, model=model_name))
                 s.commit()
                 print(f"  ✓ {company.ticker}")
             except Exception as e:

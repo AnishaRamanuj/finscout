@@ -17,6 +17,10 @@ class Company(Base):
     sector = Column(String)
     industry = Column(String)
     market_cap = Column(Float)
+    current_price = Column(Float)
+    pct_change_1y = Column(Float)
+    pct_change_3m = Column(Float)
+    pct_change_1m = Column(Float)
     exchange = Column(String, default="NSE")
     updated_at = Column(DateTime, default=datetime.utcnow)
 
@@ -73,9 +77,30 @@ class Alert(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class Deal(Base):
+    """NSE bulk / block deal records — one row per leg per day."""
+    __tablename__ = "deals"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ticker = Column(String, index=True)
+    kind = Column(String)           # "bulk" | "block"
+    deal_date = Column(DateTime)
+    client_name = Column(String)
+    side = Column(String)           # "BUY" | "SELL"
+    quantity = Column(Float)
+    price = Column(Float)
+    remarks = Column(Text)
+    captured_at = Column(DateTime, default=datetime.utcnow)
+
+
 engine = create_engine(settings.database_url, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
 def init_db():
+    Base.metadata.create_all(engine)
+
+
+def reset_db():
+    """Drop and recreate every table — use before a schema change."""
+    Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
