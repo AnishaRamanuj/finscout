@@ -8,6 +8,7 @@ from sqlalchemy import select, desc
 
 from app.db import SessionLocal, Company, Score, Financials, WhyNow, Deal
 from app.scoring.verdict import verdict_for
+from app.scoring.peers import peer_table, sector_median
 from app.ui._styles import inject, badge
 from app.agents.explainer import explain_ratio
 
@@ -132,6 +133,57 @@ def render():
                 if st.button(f"🤖 AI explain {name}", key=f"ex_{name}"):
                     with st.spinner("..."):
                         st.caption(explain_ratio(name, value))
+
+    # Pros / Cons
+    pc = company.pros_cons or {}
+    if pc.get("pros") or pc.get("cons"):
+        st.markdown("### Pros &amp; Cons")
+        pc_l, pc_r = st.columns(2)
+        with pc_l:
+            st.markdown("**✅ Pros**")
+            for p in pc.get("pros", []):
+                st.markdown(f"- {p}")
+        with pc_r:
+            st.markdown("**⚠️ Cons**")
+            for c in pc.get("cons", []):
+                st.markdown(f"- {c}")
+
+    # Peer comparison
+    if company.sector:
+        st.markdown("### How it compares in its sector")
+        metrics = ["composite", "pe", "pb", "roce", "pct_change_1y", "market_cap"]
+        peers = peer_table(company.sector, ticker, metrics)
+        if peers:
+            df_p = pd.DataFrame(peers)
+            # Convert market cap to Cr for display
+            if "market_cap" in df_p.columns:
+                df_p["market_cap_cr"] = (df_p["market_cap"].fillna(0) / 1e7).round(0)
+                df_p = df_p.drop(columns=["market_cap"])
+            if "roce" in df_p.columns:
+                df_p["roce"] = (df_p["roce"].fillna(0) * 100).round(1)
+            st.dataframe(
+                df_p,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "composite": st.column_config.ProgressColumn("Score", min_value=0, max_value=100, format="%.0f"),
+                    "pct_change_1y": st.column_config.NumberColumn("1Y %", format="%+.1f%%"),
+                    "roce": st.column_config.NumberColumn("ROCE %", format="%.1f%%"),
+                    "market_cap_cr": st.column_config.NumberColumn("Mkt Cap (Cr)", format="₹%d"),
+                },
+            )
+            median_score = sector_median(company.sector, "composite")
+            if median_score is not None and score:
+                diff = score.composite - median_score
+                arrow = "above" if diff >= 0 else "below"
+                st.caption(f"This stock scores **{abs(diff):.0f} points {arrow}** the sector median ({median_score:.0f}).")
+
+    # Quarterly financials snapshot
+    if fin and fin.raw:
+        qi = fin.raw.get("info", {})  # from yfinance info
+        if qi:
+            with st.expander("📊 Full fundamentals snapshot (yfinance)"):
+                st.json({k: v for k, v in qi.items() if v is not None})
 
     # Recent trades
     if deals:

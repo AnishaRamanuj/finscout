@@ -21,6 +21,8 @@ class Company(Base):
     pct_change_1y = Column(Float)
     pct_change_3m = Column(Float)
     pct_change_1m = Column(Float)
+    pros_cons = Column(JSON)                         # {"pros": [...], "cons": [...]}
+    shareholding = Column(JSON)                      # {"promoter": .., "fii": .., ...}
     exchange = Column(String, default="NSE")
     updated_at = Column(DateTime, default=datetime.utcnow)
 
