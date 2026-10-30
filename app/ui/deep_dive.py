@@ -53,7 +53,7 @@ def render():
         score = s.execute(select(Score).where(Score.ticker == ticker)).scalar_one_or_none()
         fin = s.execute(
             select(Financials).where(Financials.ticker == ticker)
-            .order_by(desc(Financials.fetched_at))
+            .order_by(desc(Financials.fetched_at)).limit(1)
         ).scalar_one_or_none()
         why = s.execute(
             select(WhyNow).where(WhyNow.ticker == ticker)

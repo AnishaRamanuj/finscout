@@ -20,7 +20,7 @@ def run_pros_cons(top_n: int = 30):
             fin = s.execute(
                 select(Financials)
                 .where(Financials.ticker == company.ticker)
-                .order_by(desc(Financials.fetched_at))
+                .order_by(desc(Financials.fetched_at)).limit(1)
             ).scalar_one_or_none()
 
             scores = {

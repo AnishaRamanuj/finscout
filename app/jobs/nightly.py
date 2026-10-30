@@ -2,6 +2,8 @@
 import time
 from datetime import datetime
 
+from sqlalchemy import delete
+
 from app.config import settings
 from app.data.tickers import fetch_nse_tickers
 from app.data.financials import fetch_company_financials
@@ -75,6 +77,8 @@ def run_nightly(limit: int = 100, universe: str = "nifty50"):
                 company.updated_at = datetime.utcnow()
                 session.merge(company)
 
+                # Idempotent: drop any older Financials rows for this ticker before inserting the fresh one
+                session.execute(delete(Financials).where(Financials.ticker == row.ticker))
                 fin = Financials(
                     ticker=row.ticker,
                     period=datetime.utcnow().strftime("%Y-%m"),
