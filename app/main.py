@@ -10,7 +10,7 @@ if str(_ROOT) not in sys.path:
 import streamlit as st
 
 from app.config import settings
-from app.ui import discover, portfolio, deep_dive
+from app.ui import discover, portfolio, deep_dive, screener
 from app.db import init_db
 
 st.set_page_config(
@@ -25,7 +25,14 @@ init_db()
 st.sidebar.title("🔍 FinScout")
 st.sidebar.caption("AI-powered stock discovery")
 
-tab = st.sidebar.radio("Navigate", ["Discover", "My Portfolio", "Deep Dive"])
+if "fs_tab" not in st.session_state:
+    st.session_state.fs_tab = "Discover"
+
+tab = st.sidebar.radio(
+    "Navigate",
+    ["Discover", "Screener", "My Portfolio", "Deep Dive"],
+    key="fs_tab",
+)
 
 st.sidebar.markdown("---")
 if settings.llm_provider == "ollama":
@@ -35,6 +42,8 @@ else:
 
 if tab == "Discover":
     discover.render()
+elif tab == "Screener":
+    screener.render()
 elif tab == "My Portfolio":
     portfolio.render()
 else:
