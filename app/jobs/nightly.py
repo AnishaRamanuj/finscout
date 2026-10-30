@@ -7,20 +7,28 @@ from app.data.tickers import fetch_nse_tickers
 from app.data.financials import fetch_company_financials
 from app.data.news import fetch_news
 from app.data.nse_trades import fetch_trades_for_ticker
+from app.data.universes import get_universe
 from app.scoring.engine import compute_scores
 from app.db import SessionLocal, Company, Financials, Score, init_db
 
 
-def run_nightly(limit: int = 100):
+def run_nightly(limit: int = 100, universe: str = "nifty50"):
     """
-    Pulls top `limit` NSE tickers, fetches financials + news, computes scores.
-    Default 100 for safety; raise to 500+ once you've validated it works.
+    Pulls `limit` NSE tickers from the chosen universe, fetches financials +
+    news + bulk/block deals, computes scores.
+
+    universe: 'nifty50' (default) | 'nifty100' | 'all'
     """
     init_db()
 
     print(f"[{datetime.utcnow()}] Fetching NSE ticker master...")
-    tickers = fetch_nse_tickers().head(limit)
-    print(f"  → {len(tickers)} tickers")
+    tickers = fetch_nse_tickers()
+    allowed = get_universe(universe)
+    if allowed:
+        tickers = tickers[tickers["ticker"].isin(allowed)].reset_index(drop=True)
+        print(f"  → filtered to universe '{universe}' ({len(tickers)} available)")
+    tickers = tickers.head(limit)
+    print(f"  → ingesting {len(tickers)} tickers")
 
     with SessionLocal() as session:
         for i, row in tickers.iterrows():
@@ -70,4 +78,5 @@ def run_nightly(limit: int = 100):
 if __name__ == "__main__":
     import sys
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 100
-    run_nightly(n)
+    uni = sys.argv[2] if len(sys.argv) > 2 else "nifty50"
+    run_nightly(n, uni)
