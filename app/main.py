@@ -25,7 +25,14 @@ init_db()
 st.sidebar.title("🔍 FinScout")
 st.sidebar.caption("AI-powered stock discovery")
 
-tab = st.sidebar.radio("Navigate", ["Discover", "Screener", "My Portfolio", "Deep Dive"])
+if "fs_tab" not in st.session_state:
+    st.session_state.fs_tab = "Discover"
+
+tab = st.sidebar.radio(
+    "Navigate",
+    ["Discover", "Screener", "My Portfolio", "Deep Dive"],
+    key="fs_tab",
+)
 
 st.sidebar.markdown("---")
 if settings.llm_provider == "ollama":

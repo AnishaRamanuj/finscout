@@ -19,6 +19,11 @@ from app.ui._styles import inject, badge
 from app.agents.copilot import answer_portfolio_question
 
 
+def _goto_deep_dive(ticker: str):
+    st.session_state.fs_selected_ticker = ticker
+    st.session_state.fs_tab = "Deep Dive"
+
+
 def render():
     inject()
     st.markdown('<div class="fs-header-title">My Portfolio</div>', unsafe_allow_html=True)
@@ -164,6 +169,18 @@ def _show_basket(df: pd.DataFrame, budget: int):
             ),
         },
     )
+
+    st.caption("Open any pick in Deep Dive →")
+    pick_cols = st.columns(min(6, len(df)))
+    for i, (_, row) in enumerate(df.head(6).iterrows()):
+        with pick_cols[i]:
+            st.button(
+                f"🔍 {row['Ticker']}",
+                key=f"pb_dd_{row['Ticker']}",
+                use_container_width=True,
+                on_click=_goto_deep_dive,
+                args=(row["Ticker"],),
+            )
 
     csv = df.to_csv(index=False).encode("utf-8")
     st.download_button("⬇ Download basket as CSV", csv, file_name="finscout_basket.csv", mime="text/csv")

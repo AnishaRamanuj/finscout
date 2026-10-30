@@ -16,6 +16,12 @@ from app.scoring.verdict import verdict_for
 from app.ui._styles import inject, badge
 
 
+def _goto_deep_dive(ticker: str):
+    """Button on_click callback — runs BEFORE the sidebar radio reads fs_tab."""
+    st.session_state.fs_selected_ticker = ticker
+    st.session_state.fs_tab = "Deep Dive"
+
+
 def render():
     inject()
 
@@ -104,6 +110,16 @@ def _render_pick(row, hero: bool):
                 f'<div style="font-size:34px;font-weight:700;color:{v.color};">{score.composite:.0f}</div></div>',
                 unsafe_allow_html=True,
             )
+
+        # Prominent full-card-width Deep Dive button right under the header
+        st.button(
+            f"🔍 Open Deep Dive for {company.ticker} →",
+            key=f"dd_{company.ticker}",
+            type="primary" if hero else "secondary",
+            use_container_width=True,
+            on_click=_goto_deep_dive,
+            args=(company.ticker,),
+        )
 
         st.markdown(f'<div class="fs-why"><i>{v.plain}</i></div>', unsafe_allow_html=True)
 

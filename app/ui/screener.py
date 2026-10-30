@@ -15,6 +15,11 @@ from app.ui._styles import inject
 from app.agents.nl_query import nl_to_spec
 
 
+def _goto_deep_dive(ticker: str):
+    st.session_state.fs_selected_ticker = ticker
+    st.session_state.fs_tab = "Deep Dive"
+
+
 EXAMPLE_QUERIES = [
     "Large cap IT companies with ROCE above 25%",
     "Cheap banks with strong momentum",
@@ -84,6 +89,18 @@ def render():
             "pe": st.column_config.NumberColumn("P/E", format="%.1f"),
         },
     )
+
+    st.caption("Click a ticker below to open its Deep Dive →")
+    picker_cols = st.columns(min(5, len(df)))
+    for i, (_, row) in enumerate(df.head(5).iterrows()):
+        with picker_cols[i]:
+            st.button(
+                f"🔍 {row['Ticker']}",
+                key=f"scr_dd_{row['Ticker']}",
+                use_container_width=True,
+                on_click=_goto_deep_dive,
+                args=(row["Ticker"],),
+            )
 
     csv = df.to_csv(index=False).encode("utf-8")
     st.download_button("⬇ Download results as CSV", csv,

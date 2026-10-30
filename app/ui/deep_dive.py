@@ -36,9 +36,17 @@ def render():
         unsafe_allow_html=True,
     )
 
-    default = "RELIANCE" if "RELIANCE" in all_tickers else all_tickers[0]
+    pre = st.session_state.get("fs_selected_ticker")
+    if pre and pre in all_tickers:
+        default = pre
+    elif "RELIANCE" in all_tickers:
+        default = "RELIANCE"
+    else:
+        default = all_tickers[0]
     ticker = st.selectbox("Pick a stock", all_tickers,
                           index=all_tickers.index(default))
+    # keep selection sticky across tab switches
+    st.session_state.fs_selected_ticker = ticker
 
     with SessionLocal() as s:
         company = s.execute(select(Company).where(Company.ticker == ticker)).scalar_one_or_none()
