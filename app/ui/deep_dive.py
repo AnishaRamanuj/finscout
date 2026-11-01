@@ -18,8 +18,11 @@ from sqlalchemy import select, desc
 from app.db import SessionLocal, Company, Score, Financials, WhyNow, Deal
 from app.scoring.verdict import verdict_for
 from app.scoring.peers import peer_table, sector_median
+from app.scoring.upside import compute_upside
 from app.ui._styles import inject, badge
 from app.agents.explainer import explain_ratio
+
+HIDDEN_GEM_BADGE_BG = "#8b5cf6"
 
 
 METRIC_HINT = {
@@ -73,11 +76,30 @@ def render():
 
     v = verdict_for(score.composite if score else 50)
 
+    # Upside estimate
+    peer_pe = None
+    try:
+        peer_pe = sector_median(company.sector, "pe")
+    except Exception:
+        pass
+    est = compute_upside(
+        current_price=company.current_price,
+        pe=fin.pe if fin else None,
+        roce=fin.roce if fin else None,
+        growth_score=score.growth if score else None,
+        quality_score=score.quality if score else None,
+        composite_score=score.composite if score else None,
+        pct_change_1y=company.pct_change_1y,
+        peer_median_pe=peer_pe,
+    )
+
     # --- Hero: verdict + name + Why-Now + Risk ----------------------------
     st.markdown('<div class="fs-card fs-hero">', unsafe_allow_html=True)
+    badges_html = badge(v.label, v.color, v.text_color)
+    if est.is_hidden_gem:
+        badges_html += " &nbsp;" + badge("💎 Hidden Gem", HIDDEN_GEM_BADGE_BG, "#ffffff")
     st.markdown(
-        f"{badge(v.label, v.color, v.text_color)} &nbsp;"
-        f'<span style="color:#9ca3af;font-size:13px;">{company.sector or "—"}</span>',
+        f'{badges_html} &nbsp;<span style="color:#9ca3af;font-size:13px;">{company.sector or "—"}</span>',
         unsafe_allow_html=True,
     )
     st.markdown(
@@ -97,11 +119,19 @@ def render():
     # --- Chart --------------------------------------------------------------
     _price_chart(fin, ticker)
 
-    # --- The 3 numbers everyone cares about --------------------------------
-    cols = st.columns(3)
+    # --- The 5 numbers everyone cares about --------------------------------
+    cols = st.columns(5)
     _stat(cols[0], "Price today", _fmt_price(company.current_price))
-    _stat(cols[1], "Last year", _fmt_pct(company.pct_change_1y), delta=True)
-    _stat(cols[2], "Company size", _fmt_cr(company.market_cap))
+    _stat(cols[1], "Our target", _fmt_price(est.target_price))
+    _stat(cols[2], "Upside", _fmt_pct_signed(est.upside_pct), delta=True)
+    _stat(cols[3], "Last year", _fmt_pct_signed(company.pct_change_1y), delta=True)
+    _stat(cols[4], "Size", _fmt_cr(company.market_cap))
+
+    if est.reasons:
+        with st.expander(f"🎯 Why we see {_fmt_pct_signed(est.upside_pct)} upside"):
+            for reason in est.reasons:
+                st.markdown(f"- {reason}")
+            st.caption("Model-based estimate — not a guarantee. Based on peer P/E, quality, growth and the price's 12-month path.")
 
     # --- Pros & Cons (if generated) ----------------------------------------
     pc = company.pros_cons or {}
@@ -261,3 +291,6 @@ def _fmt_pct(v):
         return "—"
     sign = "+" if v >= 0 else ""
     return f"{sign}{v:.0f}%"
+
+
+_fmt_pct_signed = _fmt_pct

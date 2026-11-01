@@ -1,15 +1,15 @@
 """Discover — the "What should I buy?" page.
 
-Designed for a first-time investor. Each pick is one card with:
-  - Verdict badge (STRONG PICK / PICK / HOLD / WATCH / AVOID)
+Each pick is one card with:
+  - Verdict badge (STRONG PICK / PICK / HIDDEN GEM / HOLD)
   - Company name + sector
-  - 3 numbers only: Price, 1-year return, Market cap
+  - Price + Target price + Growth potential + 1-year change
   - AI paragraph explaining why, with a Risk line
-  - Price chart
+  - Price chart (hero only)
   - One button → full research page
 
-Deeper breakdowns (factor scores, ratios, peers) live on Deep Dive,
-hidden behind collapsible sections.
+A toggle at the top lets a user filter to **Hidden Gems only** —
+stocks our model rates highly where the price hasn't moved yet.
 """
 from __future__ import annotations
 
@@ -20,7 +20,12 @@ from sqlalchemy import select, desc
 
 from app.db import SessionLocal, Score, Company, WhyNow, Financials
 from app.scoring.verdict import verdict_for
+from app.scoring.upside import compute_upside, UpsideEstimate
+from app.scoring.peers import sector_median
 from app.ui._styles import inject, badge
+
+
+HIDDEN_GEM_BADGE_BG = "#8b5cf6"
 
 
 def _goto_deep_dive(ticker: str):
@@ -33,7 +38,7 @@ def render():
 
     st.markdown('<div class="fs-header-title">This Week\'s AI Picks</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="fs-header-sub">Our AI reads the market every night and ranks the strongest 500+ Indian stocks. Here are its top picks right now.</div>',
+        '<div class="fs-header-sub">Our AI reads the market every night and ranks 700+ Indian stocks by fundamentals and the room they have to run.</div>',
         unsafe_allow_html=True,
     )
 
@@ -43,39 +48,76 @@ def render():
             .join(Company, Score.ticker == Company.ticker)
             .where(Company.current_price.isnot(None))
             .order_by(desc(Score.composite))
-            .limit(50)
+            .limit(200)
         ).all()
 
     if not rows:
         st.info("No data yet. Run `python -m app.jobs.nightly 500 nifty500` to populate.")
         return
 
-    # Simple controls — tucked inline, no feature-explainer paragraph.
-    picks_to_show = st.slider("How many picks to show?", 3, 20, 6, key="dc_count")
+    c1, c2 = st.columns([3, 1])
+    with c1:
+        hidden_only = st.toggle(
+            "💎 Show only Hidden Gems (strong fundamentals, hasn't rallied yet)",
+            value=True,
+            help="These are stocks our model rates highly where the price is still below where it 'should' be. Classic 'rising stars' setup.",
+        )
+    with c2:
+        picks_to_show = st.slider("How many picks?", 3, 20, 8, key="dc_count")
 
-    filtered = []
+    enriched: list[tuple] = []
+    sector_pe_cache: dict[str, float | None] = {}
     for score, company in rows:
+        fin = _latest_fin(company.ticker)
+        sector = company.sector
+        if sector not in sector_pe_cache:
+            sector_pe_cache[sector] = _safe_median_pe(sector)
+        est = compute_upside(
+            current_price=company.current_price,
+            pe=fin.pe if fin else None,
+            roce=fin.roce if fin else None,
+            growth_score=score.growth,
+            quality_score=score.quality,
+            composite_score=score.composite,
+            pct_change_1y=company.pct_change_1y,
+            peer_median_pe=sector_pe_cache[sector],
+        )
         v = verdict_for(score.composite)
         if v.label in ("Watch", "Avoid"):
             continue
-        filtered.append((score, company, v))
-        if len(filtered) >= picks_to_show:
-            break
+        enriched.append((score, company, fin, v, est))
 
-    for i, row in enumerate(filtered):
+    if hidden_only:
+        enriched = [r for r in enriched if r[4].is_hidden_gem]
+
+    # Rank: hidden gems first, otherwise by composite × (1 + upside/100).
+    enriched.sort(
+        key=lambda r: (-int(r[4].is_hidden_gem), -_combined_rank(r[0].composite, r[4].upside_pct)),
+    )
+    enriched = enriched[:picks_to_show]
+
+    if not enriched:
+        st.warning(
+            "No hidden gems match right now. Try turning off the toggle to see the full ranked list."
+        )
+        return
+
+    for i, row in enumerate(enriched):
         _render_pick(row, hero=(i == 0))
 
 
 def _render_pick(row, hero: bool):
-    score, company, v = row
+    score, company, fin, v, est = row
     card_class = "fs-card fs-hero" if hero else "fs-card"
 
     st.markdown(f'<div class="{card_class}">', unsafe_allow_html=True)
 
-    # Row 1: verdict + ticker + name
+    # Verdict row (hidden-gem badge takes priority when applicable)
+    badges_html = badge(v.label, v.color, v.text_color)
+    if est.is_hidden_gem:
+        badges_html += " &nbsp;" + badge("💎 Hidden Gem", HIDDEN_GEM_BADGE_BG, "#ffffff")
     st.markdown(
-        f"{badge(v.label, v.color, v.text_color)} &nbsp;"
-        f'<span style="color:#9ca3af;font-size:13px;">{company.sector or "—"}</span>',
+        f'{badges_html} &nbsp;<span style="color:#9ca3af;font-size:13px;">{company.sector or "—"}</span>',
         unsafe_allow_html=True,
     )
     st.markdown(
@@ -84,21 +126,18 @@ def _render_pick(row, hero: bool):
         unsafe_allow_html=True,
     )
 
-    # Row 2: the three numbers that actually matter
-    cols = st.columns(3)
-    _stat(cols[0], "Price", _fmt_price(company.current_price))
-    _stat(cols[1], "Last year", _fmt_pct(company.pct_change_1y), delta=True)
-    _stat(cols[2], "Size", _fmt_cr(company.market_cap))
+    # The 4 numbers that matter — now include the target and upside.
+    cols = st.columns(4)
+    _stat(cols[0], "Price today", _fmt_price(company.current_price))
+    _stat(cols[1], "Our target", _fmt_price(est.target_price))
+    _stat(cols[2], "Upside", _fmt_pct(est.upside_pct), delta=True)
+    _stat(cols[3], "Last year", _fmt_pct(company.pct_change_1y), delta=True)
 
-    # Row 3: the story
+    # Why Now
     with SessionLocal() as s:
         why = s.execute(
             select(WhyNow).where(WhyNow.ticker == company.ticker)
             .order_by(desc(WhyNow.generated_at)).limit(1)
-        ).scalar_one_or_none()
-        fin = s.execute(
-            select(Financials).where(Financials.ticker == company.ticker)
-            .order_by(desc(Financials.fetched_at)).limit(1)
         ).scalar_one_or_none()
 
     if why and why.text:
@@ -108,11 +147,15 @@ def _render_pick(row, hero: bool):
         if len(parts) > 1:
             st.markdown(f'<div class="fs-risk"><b>Risk:</b> {parts[1].strip()}</div>', unsafe_allow_html=True)
 
-    # Row 4: chart (hero only — keeps non-hero cards short)
+    # Why we think it has room (model-level explanation)
+    if est.reasons:
+        with st.expander("Why we think it has room to grow"):
+            for reason in est.reasons:
+                st.markdown(f"- {reason}")
+
     if hero:
         _chart(fin)
 
-    # Row 5: single call-to-action
     st.button(
         f"See full details for {company.ticker} →",
         key=f"dd_{company.ticker}",
@@ -123,6 +166,32 @@ def _render_pick(row, hero: bool):
     )
 
     st.markdown("</div>", unsafe_allow_html=True)
+
+
+# --- helpers ---------------------------------------------------------------
+
+def _combined_rank(composite: float | None, upside: float | None) -> float:
+    """Rank combining quality and room to grow — used when hidden-gem toggle is off."""
+    c = composite or 0
+    u = max(0.0, min(100.0, upside or 0))
+    return c + u * 0.35
+
+
+def _latest_fin(ticker: str):
+    with SessionLocal() as s:
+        return s.execute(
+            select(Financials).where(Financials.ticker == ticker)
+            .order_by(desc(Financials.fetched_at)).limit(1)
+        ).scalar_one_or_none()
+
+
+def _safe_median_pe(sector: str | None) -> float | None:
+    if not sector:
+        return None
+    try:
+        return sector_median(sector, "pe")
+    except Exception:
+        return None
 
 
 def _stat(col, label, value, delta=False):
@@ -182,14 +251,3 @@ def _fmt_pct(v):
         return "—"
     sign = "+" if v >= 0 else ""
     return f"{sign}{v:.0f}%"
-
-
-def _fmt_cr(v):
-    if not v:
-        return "—"
-    cr = v / 1e7
-    if cr >= 100_000:
-        return f"₹{cr/1_00_000:.1f}L Cr"
-    if cr >= 1000:
-        return f"₹{cr/1000:.0f}k Cr"
-    return f"₹{cr:,.0f} Cr"
