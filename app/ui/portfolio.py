@@ -26,13 +26,13 @@ def _goto_deep_dive(ticker: str):
 
 def render():
     inject()
-    st.markdown('<div class="fs-header-title">My Portfolio</div>', unsafe_allow_html=True)
+    st.markdown('<div class="fs-header-title">My Money</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="fs-header-sub">New to investing? Start with the Builder. Already holding stocks? Try the Analyzer.</div>',
+        '<div class="fs-header-sub">Haven\'t invested yet? Use <b>Build me a portfolio</b>. Already own stocks? Use <b>Check my holdings</b>.</div>',
         unsafe_allow_html=True,
     )
 
-    tab_builder, tab_analyzer = st.tabs(["🛠 Portfolio Builder", "📊 Portfolio Analyzer"])
+    tab_builder, tab_analyzer = st.tabs(["🛠 Build me a portfolio", "📊 Check my holdings"])
     with tab_builder:
         _render_builder()
     with tab_analyzer:
@@ -40,29 +40,22 @@ def render():
 
 
 def _render_builder():
-    st.markdown(
-        '<div class="fs-help-box">'
-        "<b>How this works.</b> Tell us your <b>budget</b> and <b>risk comfort</b>. "
-        "We pick 6–10 stocks from the top of our model, split your money across sectors "
-        "so you're not over-exposed, and show you exactly how many shares of each to buy."
-        "</div>",
-        unsafe_allow_html=True,
-    )
+    st.caption("Tell us your budget and comfort with risk. We'll pick a diversified basket of stocks for you.")
 
     c1, c2, c3 = st.columns(3)
     with c1:
         budget = st.number_input("How much to invest (₹)", min_value=5000, max_value=50_00_000,
                                  value=1_00_000, step=5000)
     with c2:
-        risk = st.selectbox("Risk comfort",
+        risk = st.selectbox("How much risk is okay?",
                             ["Conservative", "Balanced", "Aggressive"],
                             index=1,
-                            help="Conservative = large caps, steady. Balanced = mix. Aggressive = higher growth, more volatility.")
+                            help="Conservative = big safe companies. Balanced = mix. Aggressive = smaller, higher-growth bets.")
     with c3:
-        picks = st.slider("How many stocks", 5, 12, 8,
-                          help="More stocks = better diversification but smaller position in each.")
+        picks = st.slider("How many stocks?", 5, 12, 8,
+                          help="More stocks = better spread but smaller bet on each.")
 
-    build_clicked = st.button("🔎 Build my basket", type="primary", use_container_width=True)
+    build_clicked = st.button("Build my basket", type="primary", use_container_width=True)
 
     if build_clicked or st.session_state.get("fs_basket") is not None:
         basket = _build_basket(risk, picks, budget)
