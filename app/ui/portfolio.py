@@ -21,7 +21,7 @@ from app.agents.copilot import answer_portfolio_question
 
 def _goto_deep_dive(ticker: str):
     st.session_state.fs_selected_ticker = ticker
-    st.session_state.fs_tab = "Deep Dive"
+    st.session_state.fs_tab = "Research a Stock"
 
 
 def render():

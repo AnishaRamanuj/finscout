@@ -17,7 +17,7 @@ from app.agents.nl_query import nl_to_spec
 
 def _goto_deep_dive(ticker: str):
     st.session_state.fs_selected_ticker = ticker
-    st.session_state.fs_tab = "Deep Dive"
+    st.session_state.fs_tab = "Research a Stock"
 
 
 EXAMPLE_QUERIES = [
@@ -31,40 +31,33 @@ EXAMPLE_QUERIES = [
 
 def render():
     inject()
-    st.markdown('<div class="fs-header-title">Screener — Ask in Plain English</div>', unsafe_allow_html=True)
+    st.markdown('<div class="fs-header-title">Find Stocks</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="fs-header-sub">Describe what you\'re looking for; Ollama turns it into a safe filter and runs it on your local data. '
-        "No SQL, no magic — just ranked results.</div>",
-        unsafe_allow_html=True,
-    )
-
-    st.markdown(
-        '<div class="fs-help-box">'
-        "<b>Try one of these</b> &nbsp;·&nbsp; "
-        + " &nbsp;·&nbsp; ".join(f'<i>"{q}"</i>' for q in EXAMPLE_QUERIES[:3])
-        + "</div>",
+        '<div class="fs-header-sub">Describe what you\'re looking for in plain English. Our AI finds the matching companies.</div>',
         unsafe_allow_html=True,
     )
 
     query = st.text_input(
-        "Your query",
+        " ",
         placeholder=EXAMPLE_QUERIES[0],
         key="fs_screen_q",
+        label_visibility="collapsed",
     )
 
+    with st.expander("💡 Example questions you can ask"):
+        for q in EXAMPLE_QUERIES:
+            st.markdown(f"- *{q}*")
+
     if not query:
-        with st.expander("More examples"):
-            for q in EXAMPLE_QUERIES:
-                st.markdown(f"- `{q}`")
         return
 
-    with st.spinner("Translating your query…"):
+    with st.spinner("Reading your question…"):
         spec = nl_to_spec(query)
 
     if spec.get("error"):
-        st.warning(f"Query translation issue: {spec['error']}")
+        st.warning(f"Couldn't fully understand that — showing the best match. ({spec['error']})")
 
-    with st.expander("🤖 How the AI understood your query"):
+    with st.expander("🤖 How the AI understood your question (advanced)"):
         st.json(spec)
 
     df = _run_spec(spec)
