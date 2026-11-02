@@ -20,10 +20,21 @@ from app.scoring.verdict import verdict_for
 from app.scoring.peers import peer_table, sector_median
 from app.scoring.upside import compute_upside
 from app.data.live_quote import get_live_quote, format_volume
+from app.data.delivery import get_delivery_trend, delivery_trend_slope
+from app.scoring.technicals import macd_fast, macd_standard
+from app.scoring.momentum_signal import compute_signal
 from app.ui._styles import inject, badge
 from app.agents.explainer import explain_ratio
 
 HIDDEN_GEM_BADGE_BG = "#8b5cf6"
+
+MOMENTUM_COLOR = {
+    "Strong":   ("#16a34a", "#ffffff"),
+    "Building": ("#2563eb", "#ffffff"),
+    "Mixed":    ("#64748b", "#ffffff"),
+    "Fading":   ("#f59e0b", "#111827"),
+    "Quiet":    ("#374151", "#d1d5db"),
+}
 
 
 METRIC_HINT = {
@@ -119,6 +130,9 @@ def render():
 
     # --- Live Market Activity ---------------------------------------------
     _live_market_section(company, ticker)
+
+    # --- Momentum signals (volume + delivery + MACDs) ---------------------
+    _momentum_signals_section(ticker, company, fin)
 
     # --- Chart --------------------------------------------------------------
     _price_chart(fin, ticker)
@@ -270,6 +284,115 @@ def _live_market_section(company, ticker: str):
     if q.day_high and q.day_low:
         footer += f" · intraday range ₹{q.day_low:,.2f}–₹{q.day_high:,.2f}"
     st.caption(footer)
+
+
+def _momentum_signals_section(ticker: str, company, fin):
+    """Volume surge + delivery % trend + MACD(7,21,9) + MACD(12,26,9) → combined label."""
+    st.markdown("### 📊 Momentum Signals")
+
+    yf_symbol = company.yf_symbol or f"{ticker}.NS"
+    with st.spinner("Reading price + delivery data…"):
+        quote = get_live_quote(yf_symbol, ticker)
+        trend = get_delivery_trend(ticker, days=10)
+        slope = delivery_trend_slope(trend)
+        price_1y = (fin.raw or {}).get("price_1y") if fin else None
+        mf = macd_fast(price_1y) if price_1y else None
+        ms = macd_standard(price_1y) if price_1y else None
+
+    signal = compute_signal(
+        volume_surge=quote.volume_surge if quote else None,
+        latest_delivery_pct=trend[-1].delivery_pct if trend else None,
+        delivery_slope=slope,
+        macd_fast_trend=mf.trend if mf else "neutral",
+        macd_fast_cross=mf.crossover if mf else None,
+        macd_std_trend=ms.trend if ms else "neutral",
+        macd_std_cross=ms.crossover if ms else None,
+    )
+
+    bg, fg = MOMENTUM_COLOR.get(signal.label, ("#64748b", "#ffffff"))
+    hdr_l, hdr_r = st.columns([2, 1])
+    with hdr_l:
+        st.markdown(
+            f'{badge(signal.label, bg, fg)} '
+            f'<span style="color:#9ca3af;font-size:13px;">&nbsp;overall momentum</span>',
+            unsafe_allow_html=True,
+        )
+    with hdr_r:
+        st.markdown(
+            f'<div style="text-align:right;">'
+            f'<div class="fs-stat">Momentum score</div>'
+            f'<div style="font-size:30px;font-weight:700;color:{bg};">{signal.score}/100</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    # 4-stat breakdown
+    cols = st.columns(4)
+    _stat(cols[0], "Volume signal",
+          f"{signal.volume_part}/25")
+    _stat(cols[1], "Delivery signal",
+          f"{signal.delivery_part}/25")
+    _stat(cols[2], "Fast MACD (7,21,9)",
+          f"{signal.macd_fast_part}/25")
+    _stat(cols[3], "Std MACD (12,26,9)",
+          f"{signal.macd_std_part}/25")
+
+    # Human-readable reasons
+    if signal.reasons:
+        for r in signal.reasons:
+            st.markdown(f"- {r}")
+
+    # Delivery trend chart (sparkline-style)
+    if trend and len([d for d in trend if d.delivery_pct]) >= 3:
+        with st.expander(f"📦 Delivery % trend — last {len(trend)} trading days"):
+            df_d = pd.DataFrame([{
+                "Date": d.date, "Delivery %": d.delivery_pct,
+                "Volume": d.total_volume, "Close": d.close,
+            } for d in trend if d.delivery_pct is not None])
+            fig = go.Figure(go.Scatter(
+                x=df_d["Date"], y=df_d["Delivery %"], mode="lines+markers",
+                line=dict(color="#a78bfa", width=2.4),
+                marker=dict(size=7, color="#a78bfa"),
+            ))
+            fig.update_layout(
+                height=180, margin=dict(l=0, r=0, t=10, b=0),
+                xaxis=dict(showgrid=False, title=""),
+                yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)",
+                           side="right", ticksuffix="%"),
+                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                showlegend=False,
+            )
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+            st.dataframe(df_d, use_container_width=True, hide_index=True)
+
+    # MACD details for the technically-minded
+    if mf and ms and mf.macd is not None:
+        with st.expander("📐 MACD details"):
+            m_l, m_r = st.columns(2)
+            with m_l:
+                st.markdown(f"**Fast MACD (7, 21, 9)** — {mf.trend}")
+                st.markdown(
+                    f"- MACD line: `{mf.macd:.2f}`\n"
+                    f"- Signal line: `{mf.signal:.2f}`\n"
+                    f"- Histogram: `{mf.histogram:+.2f}` (prev: `{mf.prev_histogram:+.2f}`)"
+                )
+                if mf.crossover:
+                    arrow = "🟢 Crossed UP" if mf.crossover == "up" else "🔴 Crossed DOWN"
+                    st.markdown(f"**{arrow}** on the latest bar.")
+            with m_r:
+                st.markdown(f"**Standard MACD (12, 26, 9)** — {ms.trend}")
+                st.markdown(
+                    f"- MACD line: `{ms.macd:.2f}`\n"
+                    f"- Signal line: `{ms.signal:.2f}`\n"
+                    f"- Histogram: `{ms.histogram:+.2f}` (prev: `{ms.prev_histogram:+.2f}`)"
+                )
+                if ms.crossover:
+                    arrow = "🟢 Crossed UP" if ms.crossover == "up" else "🔴 Crossed DOWN"
+                    st.markdown(f"**{arrow}** on the latest bar.")
+            st.caption(
+                "MACD crosses up when the fast line pierces the signal line from below — classic buy signal. "
+                "Having **both** the fast (7,21,9) and standard (12,26,9) MACDs in agreement is the stronger confirmation."
+            )
 
 
 def _price_chart(fin, ticker):
