@@ -9,8 +9,19 @@ def fetch_company_financials(yf_symbol: str) -> dict:
     info = t.info or {}
 
     def safe_dict(df):
+        """Convert a DataFrame to a nested dict with JSON-safe (string) keys."""
         try:
-            return df.to_dict() if df is not None and not df.empty else {}
+            if df is None or df.empty:
+                return {}
+            raw = df.to_dict()
+            # Pandas index keys (dates / Timestamps) break JSON. Stringify them.
+            return {
+                str(col): {
+                    (k.isoformat() if hasattr(k, "isoformat") else str(k)): v
+                    for k, v in series.items()
+                }
+                for col, series in raw.items()
+            }
         except Exception:
             return {}
 

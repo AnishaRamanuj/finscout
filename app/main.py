@@ -10,7 +10,7 @@ if str(_ROOT) not in sys.path:
 import streamlit as st
 
 from app.config import settings
-from app.ui import discover, portfolio, deep_dive
+from app.ui import discover, portfolio, deep_dive, screener
 from app.db import init_db
 
 st.set_page_config(
@@ -25,17 +25,29 @@ init_db()
 st.sidebar.title("🔍 FinScout")
 st.sidebar.caption("AI-powered stock discovery")
 
-tab = st.sidebar.radio("Navigate", ["Discover", "My Portfolio", "Deep Dive"])
+if "fs_tab" not in st.session_state:
+    st.session_state.fs_tab = "This Week's Picks"
+
+tab = st.sidebar.radio(
+    " ",
+    ["This Week's Picks", "Find Stocks", "My Money", "Research a Stock"],
+    key="fs_tab",
+    label_visibility="collapsed",
+)
 
 st.sidebar.markdown("---")
+st.sidebar.caption("Not sure where to start? Try **This Week's Picks** or **My Money → Build me a portfolio**.")
+st.sidebar.markdown("---")
 if settings.llm_provider == "ollama":
-    st.sidebar.caption(f"Powered by Ollama · {settings.ollama_reasoning_model} + {settings.ollama_fast_model}")
+    st.sidebar.caption(f"Powered by local AI (Ollama · {settings.ollama_reasoning_model})")
 else:
-    st.sidebar.caption(f"Powered by {settings.model_reasoning} + {settings.model_fast}")
+    st.sidebar.caption(f"Powered by {settings.model_reasoning}")
 
-if tab == "Discover":
+if tab == "This Week's Picks":
     discover.render()
-elif tab == "My Portfolio":
+elif tab == "Find Stocks":
+    screener.render()
+elif tab == "My Money":
     portfolio.render()
 else:
     deep_dive.render()

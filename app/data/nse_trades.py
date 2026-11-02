@@ -16,6 +16,9 @@ from functools import lru_cache
 
 import httpx
 import pandas as pd
+from sqlalchemy import select
+
+from app.db import SessionLocal, Deal
 
 BULK_URL = "https://archives.nseindia.com/content/equities/bulk.csv"
 BLOCK_URL = "https://archives.nseindia.com/content/equities/block.csv"
@@ -64,3 +67,66 @@ def fetch_trades_for_ticker(ticker: str) -> list[dict]:
         for _, row in rows.iterrows():
             out.append({"kind": kind, **{k: row[k] for k in row.index if pd.notna(row[k])}})
     return out
+
+
+def _col(row, *candidates):
+    for c in candidates:
+        if c in row.index and pd.notna(row[c]):
+            return row[c]
+    return None
+
+
+def persist_todays_deals() -> int:
+    """Fetch today's bulk + block CSVs and insert each row into the deals table.
+
+    Idempotent per (ticker, deal_date, client, side, qty): existing rows are kept.
+    Returns the number of new rows inserted.
+    """
+    inserted = 0
+    with SessionLocal() as s:
+        for kind, df in (("bulk", fetch_bulk_deals()), ("block", fetch_block_deals())):
+            if df.empty:
+                continue
+            for _, row in df.iterrows():
+                ticker = _col(row, "symbol")
+                if not ticker:
+                    continue
+                ticker = str(ticker).upper()
+                raw_date = _col(row, "date")
+                try:
+                    deal_date = pd.to_datetime(raw_date, dayfirst=True, errors="coerce")
+                    if pd.isna(deal_date):
+                        deal_date = datetime.utcnow()
+                except Exception:
+                    deal_date = datetime.utcnow()
+                client = str(_col(row, "client_name") or "")[:255]
+                side = str(_col(row, "buy_sell") or "")[:4].upper()
+                qty = _col(row, "quantity_traded", "quantity")
+                price = _col(row, "trade_price_wght._avg._price", "trade_price", "price")
+                remarks = _col(row, "remarks")
+
+                dup = s.execute(
+                    select(Deal.id)
+                    .where(Deal.ticker == ticker)
+                    .where(Deal.deal_date == deal_date)
+                    .where(Deal.client_name == client)
+                    .where(Deal.side == side)
+                    .where(Deal.quantity == (float(qty) if qty is not None else None))
+                    .limit(1)
+                ).scalar_one_or_none()
+                if dup:
+                    continue
+
+                s.add(Deal(
+                    ticker=ticker,
+                    kind=kind,
+                    deal_date=deal_date,
+                    client_name=client,
+                    side=side,
+                    quantity=float(qty) if qty is not None else None,
+                    price=float(price) if price is not None else None,
+                    remarks=str(remarks) if remarks is not None else None,
+                ))
+                inserted += 1
+        s.commit()
+    return inserted
