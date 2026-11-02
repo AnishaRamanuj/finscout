@@ -10,15 +10,16 @@ from __future__ import annotations
 import io
 
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 from sqlalchemy import select, desc
 
 from app.db import SessionLocal, Company, Financials
 from app.scoring.momentum_lite import score_momentum
 from app.scoring.patterns import detect as detect_pattern
-from app.scoring.technicals import macd_fast
+from app.scoring.technicals import macd_fast, macd_standard
 from app.scoring.csv_rating import rate_row, CSVRating
-from app.data.delivery import _fetch_bhav, _trading_days
+from app.data.delivery import get_delivery_trend
 from app.ui._styles import inject, badge
 
 
@@ -265,48 +266,265 @@ def _render_filters_and_table(rated: pd.DataFrame):
         },
     )
 
-    # Hero: the top 5 picks after filters
-    st.markdown("### Top picks after your filters")
-    top5 = df.head(5)
-    if top5.empty:
-        st.info("No matches — loosen the filters.")
-        return
-
-    for _, r in top5.iterrows():
-        bg, fg = LABEL_COLOR.get(r["_Rating"], ("#64748b", "#ffffff"))
-        with st.container(border=True):
-            st.markdown(
-                f"{badge(r['_Rating'], bg, fg)} &nbsp;"
-                f"{badge(r['_Momentum'] + ' ' + str(r['_MomentumScore']), '#2563eb', '#ffffff')} "
-                f"&nbsp;<span style='color:#9ca3af;font-size:13px;'>{r.get('Industry', '—')} · {r.get('Industry Group', '')}</span>",
-                unsafe_allow_html=True,
-            )
-            st.markdown(
-                f"<div style='font-size:22px;font-weight:700;margin-top:4px;'>{r.get('Name', '—')} "
-                f"<span style='color:#9ca3af;font-weight:500;'>({r.get('NSE Code', '')})</span></div>",
-                unsafe_allow_html=True,
-            )
-
-            k1, k2, k3, k4 = st.columns(4)
-            k1.markdown(f'<div class="fs-stat">Price</div><div class="fs-value">₹{r.get("Current Price", 0):,.2f}</div>', unsafe_allow_html=True)
-            k2.markdown(f'<div class="fs-stat">1-year return</div><div class="fs-value">{r.get("Return over 1year") or 0:+.1f}%</div>', unsafe_allow_html=True)
-            k3.markdown(f'<div class="fs-stat">PE</div><div class="fs-value">{r.get("Price to Earnings Times") or 0:.1f}</div>', unsafe_allow_html=True)
-            k4.markdown(f'<div class="fs-stat">Combined</div><div class="fs-value" style="color:{bg}">{r["_Combined"]}/100</div>', unsafe_allow_html=True)
-
-            if r.get("_PatternTags"):
-                st.caption(f"**Chart patterns:** {r['_PatternTags']}")
-            if r.get("_Reasons"):
-                for part in r["_Reasons"].split(" · "):
-                    st.markdown(f"- {part}")
-
-            if r.get("_InDB"):
-                st.button(
-                    f"Open {r['NSE Code']} in Research →",
-                    key=f"csv_dd_{r['NSE Code']}",
-                    on_click=_goto_deep_dive,
-                    args=(r["NSE Code"],),
-                )
-
     csv_out = df.to_csv(index=False).encode("utf-8")
     st.download_button("⬇ Download rated CSV",
                        csv_out, file_name="finscout_rated.csv", mime="text/csv")
+
+    st.markdown("---")
+    st.markdown("### 🔬 Full research report")
+    st.caption("Pick any stock from the filtered list above and see its complete breakdown.")
+
+    if df.empty:
+        st.info("No matches — loosen the filters above.")
+        return
+
+    options = [
+        f"{r['_Rating']}  ·  {r.get('Name', '')}  ({r.get('NSE Code', '')})  ·  {r['_Combined']}/100"
+        for _, r in df.iterrows()
+    ]
+    choice = st.selectbox("Which stock?", options, key="csv_report_select")
+    if not choice:
+        return
+    idx = options.index(choice)
+    row = df.iloc[idx]
+    _render_full_report(row)
+
+
+def _render_full_report(r: pd.Series):
+    """Everything we know about one row, laid out as a per-stock research card."""
+    rating = r["_Rating"]
+    bg, fg = LABEL_COLOR.get(rating, ("#64748b", "#ffffff"))
+
+    # ── Header: badges + name + combined score ─────────────────────
+    hdr_l, hdr_r = st.columns([3, 1])
+    with hdr_l:
+        badges_html = (
+            f"{badge(rating, bg, fg)}&nbsp;"
+            f"{badge(f'{r['_Momentum']} {r['_MomentumScore']}', '#2563eb', '#ffffff')}"
+        )
+        if r.get("_Supertrend") == "bullish":
+            badges_html += f"&nbsp;{badge('Supertrend ↑', '#16a34a', '#ffffff')}"
+        elif r.get("_Supertrend") == "bearish":
+            badges_html += f"&nbsp;{badge('Supertrend ↓', '#dc2626', '#ffffff')}"
+        st.markdown(badges_html, unsafe_allow_html=True)
+        st.markdown(
+            f"<div style='font-size:26px;font-weight:700;margin-top:6px;'>{r.get('Name', '—')} "
+            f"<span style='color:#9ca3af;font-weight:500;'>({r.get('NSE Code', '')})</span></div>"
+            f"<div style='color:#9ca3af;font-size:13px;'>{r.get('Industry', '—')} · {r.get('Industry Group', '')}</div>",
+            unsafe_allow_html=True,
+        )
+    with hdr_r:
+        st.markdown(
+            f"<div style='text-align:right;'>"
+            f"<div class='fs-stat'>Combined</div>"
+            f"<div style='font-size:40px;font-weight:700;color:{bg};'>{r['_Combined']}/100</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    # ── Score breakdown ────────────────────────────────────────────
+    st.markdown("#### Score breakdown")
+    st.progress(int(r["_Short"]), text=f"Short-term — {r['_Short']}/100")
+    st.progress(int(r["_Long"]), text=f"Long-term — {r['_Long']}/100")
+    st.progress(int(r["_Chart"]), text=f"Chart pattern — {r['_Chart']}/100")
+
+    # ── Headline numbers ───────────────────────────────────────────
+    k1, k2, k3, k4, k5 = st.columns(5)
+    k1.markdown(f'<div class="fs-stat">Price</div><div class="fs-value">₹{r.get("Current Price", 0):,.2f}</div>', unsafe_allow_html=True)
+    k2.markdown(f'<div class="fs-stat">1Y return</div><div class="fs-value">{r.get("Return over 1year") or 0:+.1f}%</div>', unsafe_allow_html=True)
+    k3.markdown(f'<div class="fs-stat">3Y return</div><div class="fs-value">{r.get("Return over 3years") or 0:+.1f}%</div>', unsafe_allow_html=True)
+    k4.markdown(f'<div class="fs-stat">PE now</div><div class="fs-value">{r.get("Price to Earnings Times") or 0:.1f}</div>', unsafe_allow_html=True)
+    k5.markdown(f'<div class="fs-stat">Market cap</div><div class="fs-value">₹{(r.get("Market Capitalization") or 0):,.0f}Cr</div>', unsafe_allow_html=True)
+
+    # ── Reasons bullets ────────────────────────────────────────────
+    st.markdown("#### Why this rating")
+    reasons = r.get("_Reasons", "") or ""
+    if reasons:
+        for part in reasons.split(" · "):
+            st.markdown(f"- {part}")
+    else:
+        st.caption("No standout reasons flagged by the model.")
+
+    # ── PE discount vs own history ─────────────────────────────────
+    st.markdown("#### PE relative cheapness (vs its own history)")
+    pe_cols = st.columns(3)
+    _render_pe_discount(pe_cols[0], "vs 3-year avg", r.get("_PEDiscount3Y"))
+    _render_pe_discount(pe_cols[1], "vs 5-year avg", r.get("_PEDiscount5Y"))
+    _render_pe_discount(pe_cols[2], "vs 7-year avg", r.get("_PEDiscount7Y"))
+    pe_now = r.get("Price to Earnings Times")
+    pe_h3 = r.get("Historical PE 3Years")
+    pe_h5 = r.get("Historical PE 5Years")
+    pe_h7 = r.get("Historical PE 7Years")
+    st.caption(
+        f"Current PE: **{pe_now:.1f}**  ·  3Y history: **{pe_h3 or 0:.1f}**  ·  "
+        f"5Y history: **{pe_h5 or 0:.1f}**  ·  7Y history: **{pe_h7 or 0:.1f}**"
+    )
+
+    # ── Profitability trend ────────────────────────────────────────
+    st.markdown("#### Profitability trend")
+    pr_cols = st.columns(3)
+    pr_cols[0].markdown(
+        f'<div class="fs-stat">Net profit YoY</div><div class="fs-value">{_pct(r.get("_NetProfitYoY"))}</div>',
+        unsafe_allow_html=True)
+    pr_cols[1].markdown(
+        f'<div class="fs-stat">Op profit QoQ</div><div class="fs-value">{_pct(r.get("_OpProfitQoQ"))}</div>',
+        unsafe_allow_html=True)
+    pr_cols[2].markdown(
+        f'<div class="fs-stat">ROE change</div><div class="fs-value">{_pt(r.get("_ROEChange"))}</div>',
+        unsafe_allow_html=True)
+    st.caption(
+        f"Return on equity: **{r.get('Return on equity') or 0:.1f}%**  ·  "
+        f"3Y avg ROE: **{r.get('Average return on equity 3Years') or 0:.1f}%**  ·  "
+        f"Sales growth: **{r.get('Sales growth') or 0:+.1f}%**"
+    )
+
+    # ── Technical indicators ───────────────────────────────────────
+    st.markdown("#### Technical indicators")
+    t_cols = st.columns(6)
+    t_cols[0].markdown(f'<div class="fs-stat">RSI(14)</div><div class="fs-value">{_num(r.get("_RSI14"))}</div>', unsafe_allow_html=True)
+    t_cols[1].markdown(f'<div class="fs-stat">ADX(14)</div><div class="fs-value">{_num(r.get("_ADX14"))}</div>', unsafe_allow_html=True)
+    t_cols[2].markdown(f'<div class="fs-stat">Boll %B</div><div class="fs-value">{_num(r.get("_BollingerPctB"), fmt=".2f")}</div>', unsafe_allow_html=True)
+    t_cols[3].markdown(f'<div class="fs-stat">ROC(20)</div><div class="fs-value">{_pct(r.get("_ROC20"))}</div>', unsafe_allow_html=True)
+    t_cols[4].markdown(f'<div class="fs-stat">OBV slope</div><div class="fs-value">{_pct(r.get("_OBVSlope"))}</div>', unsafe_allow_html=True)
+    t_cols[5].markdown(f'<div class="fs-stat">Supertrend</div><div class="fs-value">{(r.get("_Supertrend") or "neutral").title()}</div>', unsafe_allow_html=True)
+
+    tags_text = r.get("_PatternTags") or ""
+    if tags_text:
+        st.markdown(f"**Chart patterns detected:** {tags_text}")
+
+    # ── Live-pulled charts (from DB + NSE bhavcopy) ───────────────
+    nse_code = r.get("NSE Code")
+    if nse_code and r.get("_InDB"):
+        _render_price_and_delivery_charts(nse_code)
+
+    # ── Original CSV columns dump ─────────────────────────────────
+    with st.expander("📋 Full CSV row (every column from your upload)"):
+        skip = {c for c in r.index if c.startswith("_")}
+        display = {c: v for c, v in r.items() if c not in skip and pd.notna(v)}
+        st.json(display)
+
+    # ── Jump into Research a Stock ────────────────────────────────
+    if r.get("_InDB"):
+        st.button(
+            f"🔬 Open full Research a Stock view for {nse_code} →",
+            key=f"csv_report_dd_{nse_code}",
+            type="primary",
+            use_container_width=True,
+            on_click=_goto_deep_dive,
+            args=(nse_code,),
+        )
+    else:
+        st.caption(
+            f"ℹ {nse_code or 'this stock'} isn't in our live database yet "
+            "(the full NSE ingestion is still catching up). The CSV-only rating above is complete; "
+            "the Research a Stock view will light up once the nightly job reaches it."
+        )
+
+
+def _render_pe_discount(col, label: str, value):
+    if value is None or pd.isna(value):
+        col.markdown(f'<div class="fs-stat">{label}</div><div class="fs-value">—</div>', unsafe_allow_html=True)
+        return
+    cls = "fs-delta-up" if value >= 0 else "fs-delta-down"
+    text = f"{value:+.0f}%"
+    col.markdown(f'<div class="fs-stat">{label}</div><div class="{cls}">{text}</div>', unsafe_allow_html=True)
+
+
+def _render_price_and_delivery_charts(nse_code: str):
+    with SessionLocal() as s:
+        fin = s.execute(
+            select(Financials).where(Financials.ticker == nse_code)
+            .order_by(desc(Financials.fetched_at)).limit(1)
+        ).scalar_one_or_none()
+
+    price_1y = (fin.raw or {}).get("price_1y") if fin else None
+
+    if price_1y:
+        close = (price_1y.get("Close") or {})
+        if close:
+            df_p = (
+                pd.DataFrame({"date": list(close.keys()), "close": list(close.values())})
+                .assign(date=lambda d: pd.to_datetime(d["date"], errors="coerce"))
+                .dropna()
+                .sort_values("date")
+            )
+            if not df_p.empty:
+                st.markdown("#### 📈 1-year price chart")
+                fig = go.Figure(go.Scatter(
+                    x=df_p["date"], y=df_p["close"], mode="lines",
+                    line=dict(color="#60a5fa", width=2.2),
+                    fill="tozeroy", fillcolor="rgba(96,165,250,0.07)",
+                ))
+                fig.update_layout(
+                    height=260, margin=dict(l=0, r=0, t=10, b=0),
+                    xaxis=dict(showgrid=False), plot_bgcolor="rgba(0,0,0,0)",
+                    yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)", side="right"),
+                    paper_bgcolor="rgba(0,0,0,0)", showlegend=False,
+                )
+                st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+                # MACD details
+                mf = macd_fast(price_1y)
+                ms = macd_standard(price_1y)
+                st.markdown("##### MACD")
+                mc1, mc2 = st.columns(2)
+                mc1.markdown(f"**Fast MACD (7, 21, 9)** — {mf.trend}")
+                if mf.macd is not None:
+                    mc1.markdown(
+                        f"- MACD: `{mf.macd:.2f}`  ·  Signal: `{mf.signal:.2f}`  ·  Hist: `{mf.histogram:+.2f}`"
+                    )
+                    if mf.crossover:
+                        arrow = "🟢 Cross UP" if mf.crossover == "up" else "🔴 Cross DOWN"
+                        mc1.markdown(f"**{arrow}** on latest bar.")
+                mc2.markdown(f"**Standard MACD (12, 26, 9)** — {ms.trend}")
+                if ms.macd is not None:
+                    mc2.markdown(
+                        f"- MACD: `{ms.macd:.2f}`  ·  Signal: `{ms.signal:.2f}`  ·  Hist: `{ms.histogram:+.2f}`"
+                    )
+                    if ms.crossover:
+                        arrow = "🟢 Cross UP" if ms.crossover == "up" else "🔴 Cross DOWN"
+                        mc2.markdown(f"**{arrow}** on latest bar.")
+
+    # Delivery % trend
+    trend = get_delivery_trend(nse_code, days=10)
+    valid = [d for d in trend if d.delivery_pct is not None]
+    if len(valid) >= 3:
+        st.markdown("#### 📦 Delivery % trend (last trading days)")
+        df_d = pd.DataFrame([{
+            "Date": d.date, "Delivery %": d.delivery_pct,
+            "Volume": d.total_volume, "Close": d.close,
+        } for d in valid])
+        fig_d = go.Figure(go.Scatter(
+            x=df_d["Date"], y=df_d["Delivery %"], mode="lines+markers",
+            line=dict(color="#a78bfa", width=2.4),
+            marker=dict(size=7, color="#a78bfa"),
+        ))
+        fig_d.update_layout(
+            height=180, margin=dict(l=0, r=0, t=10, b=0),
+            xaxis=dict(showgrid=False), paper_bgcolor="rgba(0,0,0,0)",
+            yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)",
+                       side="right", ticksuffix="%"),
+            plot_bgcolor="rgba(0,0,0,0)", showlegend=False,
+        )
+        st.plotly_chart(fig_d, use_container_width=True, config={"displayModeBar": False})
+        st.dataframe(df_d, use_container_width=True, hide_index=True)
+
+
+def _num(v, fmt: str = ".0f") -> str:
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return "—"
+    return f"{v:{fmt}}"
+
+
+def _pct(v) -> str:
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return "—"
+    sign = "+" if v >= 0 else ""
+    return f"{sign}{v:.1f}%"
+
+
+def _pt(v) -> str:
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return "—"
+    sign = "+" if v >= 0 else ""
+    return f"{sign}{v:.1f}pt"
