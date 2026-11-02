@@ -28,22 +28,28 @@ ALLOWED_FIELDS = {
     "market_cap_cr", "current_price",
     "pct_change_1y", "pct_change_3m", "pct_change_1m",
     "sector",
+    "momentum_signal", "momentum_score",
 }
 ALLOWED_OPS = {">", ">=", "<", "<=", "=", "!="}
 ALLOWED_SORTS = {
     "composite", "growth", "momentum", "pe", "pct_change_1y",
-    "pct_change_3m", "market_cap_cr",
+    "pct_change_3m", "market_cap_cr", "momentum_score",
 }
 
 
 SYSTEM = (
     "You translate a retail investor's natural-language stock screen into a strict JSON filter spec. "
     "ALLOWED fields: composite, growth, momentum, valuation, profitability, sentiment, insider, quality, "
-    "pe, pb, roce, market_cap_cr, current_price, pct_change_1y, pct_change_3m, pct_change_1m, sector. "
+    "pe, pb, roce, market_cap_cr, current_price, pct_change_1y, pct_change_3m, pct_change_1m, sector, "
+    "momentum_signal, momentum_score. "
     "ALLOWED ops: >, >=, <, <=, =, !=. "
     "Rules of thumb: 'small cap' => market_cap_cr < 20000, 'mid cap' => market_cap_cr between 20000 and 100000, "
     "'large cap' => market_cap_cr >= 100000. 'cheap' => pe < 20. 'growing' => growth >= 60. "
     "'high quality' => quality >= 70 OR roce >= 20. 'momentum' => momentum >= 70. "
+    "'building momentum' or 'about to break out' => momentum_signal = Building OR momentum_signal = Strong "
+    "(you can also use momentum_score >= 55). 'strong momentum' => momentum_signal = Strong "
+    "(or momentum_score >= 75). "
+    "Valid momentum_signal values: Strong, Building, Mixed, Fading, Quiet. "
     "Sectors use Yahoo Finance names: 'Technology', 'Financial Services', 'Healthcare', 'Energy', "
     "'Consumer Cyclical', 'Consumer Defensive', 'Industrials', 'Basic Materials', 'Utilities', "
     "'Communication Services', 'Real Estate'. "

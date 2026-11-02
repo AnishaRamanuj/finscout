@@ -13,10 +13,12 @@ import pandas as pd
 import streamlit as st
 from sqlalchemy import select, desc
 
-from app.db import SessionLocal, Score, Company
+from app.db import SessionLocal, Score, Company, Financials
 from app.scoring.verdict import verdict_for
+from app.scoring.momentum_lite import score_momentum
 from app.ui._styles import inject, badge
 from app.agents.copilot import answer_portfolio_question
+from sqlalchemy import desc as _desc
 
 
 def _goto_deep_dive(ticker: str):
@@ -74,6 +76,7 @@ def _build_basket(risk: str, picks: int, budget: int) -> pd.DataFrame:
             .where(Company.current_price.isnot(None))
             .where(Company.current_price > 0)
             .order_by(desc(Score.composite))
+            .limit(80)   # score momentum on the top 80, pick from there
         ).all()
 
     if not rows:
@@ -92,16 +95,31 @@ def _build_basket(risk: str, picks: int, budget: int) -> pd.DataFrame:
         elif risk == "Balanced":
             if (company.market_cap or 0) < 10_000 * 1e7:   # ≥ ₹10 kcr
                 continue
-        candidates.append((score, company, v))
+
+        # Momentum must not be Fading/Quiet — the chart has to agree.
+        with SessionLocal() as s2:
+            fin = s2.execute(
+                select(Financials).where(Financials.ticker == company.ticker)
+                .order_by(_desc(Financials.fetched_at)).limit(1)
+            ).scalar_one_or_none()
+        price_1y = (fin.raw or {}).get("price_1y") if fin else {}
+        mom = score_momentum(company.ticker, price_1y)
+        if mom.label in ("Fading", "Quiet"):
+            continue
+        # Aggressive risk bias toward "Strong / Building" names.
+        if risk == "Aggressive" and mom.label == "Mixed":
+            continue
+
+        candidates.append((score, company, v, mom))
 
     # sector-diversify: at most 2 picks per sector
     chosen: list[tuple] = []
     sector_count: dict[str, int] = {}
-    for score, company, v in candidates:
+    for score, company, v, mom in candidates:
         sec = company.sector or "Other"
         if sector_count.get(sec, 0) >= 2:
             continue
-        chosen.append((score, company, v))
+        chosen.append((score, company, v, mom))
         sector_count[sec] = sector_count.get(sec, 0) + 1
         if len(chosen) >= picks:
             break
@@ -109,21 +127,26 @@ def _build_basket(risk: str, picks: int, budget: int) -> pd.DataFrame:
     if not chosen:
         return pd.DataFrame()
 
-    # tier-weighted allocation
+    # tier-weighted allocation (verdict tier + momentum bump)
     weights = []
-    for score, _, v in chosen:
+    for score, _, v, mom in chosen:
         w = 1.4 if v.label == "Strong Pick" else (1.1 if v.label == "Pick" else 0.8)
+        if mom.label == "Strong":
+            w *= 1.15
+        elif mom.label == "Building":
+            w *= 1.07
         weights.append(w)
     total = sum(weights)
     allocs = [w / total for w in weights]
 
     out = []
-    for (score, company, v), alloc in zip(chosen, allocs):
+    for (score, company, v, mom), alloc in zip(chosen, allocs):
         amount = budget * alloc
         price = company.current_price or 1
         shares = int(amount // price) if price > 0 else 0
         out.append({
             "Verdict": v.label,
+            "Momentum": f"{mom.label} ({mom.score})",
             "Ticker": company.ticker,
             "Name": company.name,
             "Sector": company.sector or "—",
