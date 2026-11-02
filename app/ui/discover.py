@@ -22,10 +22,19 @@ from app.db import SessionLocal, Score, Company, WhyNow, Financials
 from app.scoring.verdict import verdict_for
 from app.scoring.upside import compute_upside, UpsideEstimate
 from app.scoring.peers import sector_median
+from app.scoring.momentum_lite import score_momentum, LiteSignal
 from app.ui._styles import inject, badge
 
 
 HIDDEN_GEM_BADGE_BG = "#8b5cf6"
+
+MOMENTUM_COLOR = {
+    "Strong":   ("#16a34a", "#ffffff"),
+    "Building": ("#2563eb", "#ffffff"),
+    "Mixed":    ("#64748b", "#ffffff"),
+    "Fading":   ("#f59e0b", "#111827"),
+    "Quiet":    ("#374151", "#d1d5db"),
+}
 
 
 def _goto_deep_dive(ticker: str):
@@ -67,32 +76,40 @@ def render():
 
     enriched: list[tuple] = []
     sector_pe_cache: dict[str, float | None] = {}
-    for score, company in rows:
-        fin = _latest_fin(company.ticker)
-        sector = company.sector
-        if sector not in sector_pe_cache:
-            sector_pe_cache[sector] = _safe_median_pe(sector)
-        est = compute_upside(
-            current_price=company.current_price,
-            pe=fin.pe if fin else None,
-            roce=fin.roce if fin else None,
-            growth_score=score.growth,
-            quality_score=score.quality,
-            composite_score=score.composite,
-            pct_change_1y=company.pct_change_1y,
-            peer_median_pe=sector_pe_cache[sector],
-        )
-        v = verdict_for(score.composite)
-        if v.label in ("Watch", "Avoid"):
-            continue
-        enriched.append((score, company, fin, v, est))
+    with st.spinner("Scoring momentum across the universe…"):
+        for score, company in rows:
+            fin = _latest_fin(company.ticker)
+            sector = company.sector
+            if sector not in sector_pe_cache:
+                sector_pe_cache[sector] = _safe_median_pe(sector)
+            est = compute_upside(
+                current_price=company.current_price,
+                pe=fin.pe if fin else None,
+                roce=fin.roce if fin else None,
+                growth_score=score.growth,
+                quality_score=score.quality,
+                composite_score=score.composite,
+                pct_change_1y=company.pct_change_1y,
+                peer_median_pe=sector_pe_cache[sector],
+            )
+            v = verdict_for(score.composite)
+            if v.label in ("Watch", "Avoid"):
+                continue
+            price_1y = (fin.raw or {}).get("price_1y") if fin else {}
+            mom = score_momentum(company.ticker, price_1y)
+            enriched.append((score, company, fin, v, est, mom))
 
     if hidden_only:
-        enriched = [r for r in enriched if r[4].is_hidden_gem]
+        # Hidden Gem now ALSO requires momentum to not be Fading/Quiet — the
+        # chart has to agree with the fundamentals before we flag it.
+        enriched = [r for r in enriched if r[4].is_hidden_gem and r[5].label in ("Strong", "Building", "Mixed")]
 
-    # Rank: hidden gems first, otherwise by composite × (1 + upside/100).
+    # Rank: hidden gems first; then by (composite × upside × momentum) blend.
     enriched.sort(
-        key=lambda r: (-int(r[4].is_hidden_gem), -_combined_rank(r[0].composite, r[4].upside_pct)),
+        key=lambda r: (
+            -int(r[4].is_hidden_gem),
+            -_combined_rank(r[0].composite, r[4].upside_pct, r[5].score),
+        ),
     )
     enriched = enriched[:picks_to_show]
 
@@ -107,15 +124,17 @@ def render():
 
 
 def _render_pick(row, hero: bool):
-    score, company, fin, v, est = row
+    score, company, fin, v, est, mom = row
     card_class = "fs-card fs-hero" if hero else "fs-card"
 
     st.markdown(f'<div class="{card_class}">', unsafe_allow_html=True)
 
-    # Verdict row (hidden-gem badge takes priority when applicable)
+    # Verdict row (hidden-gem + momentum badges piled on when applicable)
     badges_html = badge(v.label, v.color, v.text_color)
     if est.is_hidden_gem:
         badges_html += " &nbsp;" + badge("💎 Hidden Gem", HIDDEN_GEM_BADGE_BG, "#ffffff")
+    mom_bg, mom_fg = MOMENTUM_COLOR.get(mom.label, ("#64748b", "#ffffff"))
+    badges_html += " &nbsp;" + badge(f"📊 {mom.label} {mom.score}", mom_bg, mom_fg)
     st.markdown(
         f'{badges_html} &nbsp;<span style="color:#9ca3af;font-size:13px;">{company.sector or "—"}</span>',
         unsafe_allow_html=True,
@@ -126,12 +145,13 @@ def _render_pick(row, hero: bool):
         unsafe_allow_html=True,
     )
 
-    # The 4 numbers that matter — now include the target and upside.
-    cols = st.columns(4)
+    # Five numbers: price, target, upside, 1Y, momentum
+    cols = st.columns(5)
     _stat(cols[0], "Price today", _fmt_price(company.current_price))
     _stat(cols[1], "Our target", _fmt_price(est.target_price))
     _stat(cols[2], "Upside", _fmt_pct(est.upside_pct), delta=True)
     _stat(cols[3], "Last year", _fmt_pct(company.pct_change_1y), delta=True)
+    _stat(cols[4], "Momentum", f"{mom.score}/100")
 
     # Why Now
     with SessionLocal() as s:
@@ -147,11 +167,16 @@ def _render_pick(row, hero: bool):
         if len(parts) > 1:
             st.markdown(f'<div class="fs-risk"><b>Risk:</b> {parts[1].strip()}</div>', unsafe_allow_html=True)
 
-    # Why we think it has room (model-level explanation)
-    if est.reasons:
+    # Combined "why" expander: upside reasons + momentum tells
+    reasons_block: list[str] = list(est.reasons)
+    mom_tells = _momentum_tells(mom)
+    if mom_tells:
+        reasons_block.append("**Momentum signals:**")
+        reasons_block.extend(f"&nbsp;&nbsp;&nbsp;· {t}" for t in mom_tells)
+    if reasons_block:
         with st.expander("Why we think it has room to grow"):
-            for reason in est.reasons:
-                st.markdown(f"- {reason}")
+            for r in reasons_block:
+                st.markdown(f"- {r}", unsafe_allow_html=True)
 
     if hero:
         _chart(fin)
@@ -170,11 +195,33 @@ def _render_pick(row, hero: bool):
 
 # --- helpers ---------------------------------------------------------------
 
-def _combined_rank(composite: float | None, upside: float | None) -> float:
-    """Rank combining quality and room to grow — used when hidden-gem toggle is off."""
+def _combined_rank(composite: float | None, upside: float | None, momentum: int | None = None) -> float:
+    """Rank combining quality, room to grow, and today's momentum confirmation."""
     c = composite or 0
     u = max(0.0, min(100.0, upside or 0))
-    return c + u * 0.35
+    m = momentum or 0
+    return c + u * 0.35 + m * 0.25
+
+
+def _momentum_tells(mom: LiteSignal) -> list[str]:
+    tells: list[str] = []
+    if mom.delivery_pct is not None and mom.delivery_slope is not None:
+        if mom.delivery_slope >= 1.0:
+            tells.append(
+                f"Delivery % at {mom.delivery_pct:.0f}% and climbing +{mom.delivery_slope:.1f}pt/day — "
+                "buyers taking delivery, not just day-trading."
+            )
+        elif mom.delivery_pct >= 50:
+            tells.append(f"Delivery % steady at {mom.delivery_pct:.0f}%.")
+    if mom.macd_fast_trend == "bullish" and mom.macd_std_trend == "bullish":
+        tells.append("Both fast (7,21,9) and standard (12,26,9) MACDs are bullish — timeframes agree.")
+    elif mom.macd_fast_trend == "bullish":
+        tells.append("Fast MACD (7,21,9) is bullish — early momentum building.")
+    elif mom.macd_fast_trend == "bearish" and mom.macd_std_trend == "bearish":
+        tells.append("Both MACDs are bearish — chart hasn't confirmed yet.")
+    if mom.price_trend == "up":
+        tells.append("5-day moving average is pulling above the 20-day — short-term trend is up.")
+    return tells
 
 
 def _latest_fin(ticker: str):

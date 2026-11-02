@@ -11,6 +11,7 @@ from sqlalchemy import select
 
 from app.db import SessionLocal, Company, Score, Financials
 from app.scoring.verdict import verdict_for
+from app.scoring.momentum_lite import score_momentum
 from app.ui._styles import inject
 from app.agents.nl_query import nl_to_spec
 
@@ -21,11 +22,12 @@ def _goto_deep_dive(ticker: str):
 
 
 EXAMPLE_QUERIES = [
+    "Mid caps with building momentum and strong fundamentals",
+    "Cheap stocks about to break out",
     "Large cap IT companies with ROCE above 25%",
-    "Cheap banks with strong momentum",
-    "Mid-cap pharma growing 20%+ with high quality",
-    "Small-cap industrials with low P/E and positive 1-year return",
-    "Any sector with composite above 65 and 3-month return positive",
+    "Pharma stocks growing 20%+ with building momentum",
+    "Any sector with composite above 65 and Strong momentum",
+    "Hidden gems — low 1-year return but momentum building",
 ]
 
 
@@ -75,6 +77,9 @@ def render():
             "composite": st.column_config.ProgressColumn(
                 "Score", min_value=0, max_value=100, format="%.0f"
             ),
+            "momentum_score": st.column_config.ProgressColumn(
+                "📊 Momentum", min_value=0, max_value=100, format="%d"
+            ),
             "market_cap_cr": st.column_config.NumberColumn("Mkt Cap (Cr)", format="₹%d"),
             "current_price": st.column_config.NumberColumn("Price (₹)", format="%.2f"),
             "pct_change_1y": st.column_config.NumberColumn("1Y %", format="%+.1f%%"),
@@ -111,6 +116,8 @@ def _run_spec(spec: dict) -> pd.DataFrame:
 
     records = []
     for company, score, fin in rows:
+        price_1y = (fin.raw or {}).get("price_1y") if fin else {}
+        mom = score_momentum(company.ticker, price_1y)
         rec = {
             "Ticker": company.ticker,
             "Name": company.name,
@@ -132,6 +139,8 @@ def _run_spec(spec: dict) -> pd.DataFrame:
             "pb": fin.pb if fin else None,
             "roce": (fin.roce * 100) if (fin and fin.roce is not None) else None,
             "Verdict": verdict_for(score.composite).label,
+            "momentum_signal": mom.label,
+            "momentum_score": mom.score,
         }
         records.append(rec)
 
