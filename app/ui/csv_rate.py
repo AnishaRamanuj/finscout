@@ -166,9 +166,13 @@ def _render_filters_and_table(rated: pd.DataFrame):
             industries = sorted(rated["Industry"].dropna().unique()) if "Industry" in rated.columns else []
             chosen_industries = st.multiselect("Industry", industries, default=[])
         with f3:
-            max_pe = int(rated["Price to Earnings Times"].dropna().max()) if "Price to Earnings Times" in rated.columns else 300
+            pe_col = "Price to Earning" if "Price to Earning" in rated.columns else "Price to Earnings Times"
+            if pe_col in rated.columns:
+                max_pe = int(rated[pe_col].dropna().max())
+            else:
+                max_pe = 300
             max_pe = max(max_pe, 50)
-            pe_range = st.slider("PE range", 0, min(max_pe, 500), (0, min(max_pe, 500)))
+            pe_range = st.slider("PE range", 0, min(max_pe, 2000), (0, min(max_pe, 2000)))
         with f4:
             min_combined = st.slider("Minimum combined rating", 0, 100, 0)
 
@@ -191,8 +195,9 @@ def _render_filters_and_table(rated: pd.DataFrame):
         df = df[df["_Rating"].isin(chosen_verdicts)]
     if chosen_industries:
         df = df[df["Industry"].isin(chosen_industries)]
-    if "Price to Earnings Times" in df.columns:
-        df = df[df["Price to Earnings Times"].between(pe_range[0], pe_range[1], inclusive="both")]
+    pe_col = "Price to Earning" if "Price to Earning" in df.columns else "Price to Earnings Times"
+    if pe_col in df.columns:
+        df = df[df[pe_col].between(pe_range[0], pe_range[1], inclusive="both")]
     if min_combined > 0:
         df = df[df["_Combined"] >= min_combined]
     if chosen_mom:
@@ -210,7 +215,7 @@ def _render_filters_and_table(rated: pd.DataFrame):
     priority_user_cols = [
         c for c in [
             "Name", "NSE Code", "Industry", "Current Price",
-            "Price to Earnings Times", "Volume", "Volume Times Compared to 1 Week",
+            "Price to Earning", "Volume", "Volume Times Compared to 1 Week",
             "Return over 1week", "Return over 1month", "Return over 1year",
             "Return on equity", "Sales growth",
         ] if c in df.columns
@@ -333,7 +338,9 @@ def _render_full_report(r: pd.Series):
     k1.markdown(f'<div class="fs-stat">Price</div><div class="fs-value">₹{r.get("Current Price", 0):,.2f}</div>', unsafe_allow_html=True)
     k2.markdown(f'<div class="fs-stat">1Y return</div><div class="fs-value">{r.get("Return over 1year") or 0:+.1f}%</div>', unsafe_allow_html=True)
     k3.markdown(f'<div class="fs-stat">3Y return</div><div class="fs-value">{r.get("Return over 3years") or 0:+.1f}%</div>', unsafe_allow_html=True)
-    k4.markdown(f'<div class="fs-stat">PE now</div><div class="fs-value">{r.get("Price to Earnings Times") or 0:.1f}</div>', unsafe_allow_html=True)
+    # Real trailing PE lives in "Price to Earning" (Screener's canonical field).
+    pe_display = r.get("Price to Earning") or r.get("Price to Earnings Times") or 0
+    k4.markdown(f'<div class="fs-stat">PE now</div><div class="fs-value">{pe_display:.1f}</div>', unsafe_allow_html=True)
     k5.markdown(f'<div class="fs-stat">Market cap</div><div class="fs-value">₹{(r.get("Market Capitalization") or 0):,.0f}Cr</div>', unsafe_allow_html=True)
 
     # ── Reasons bullets ────────────────────────────────────────────
@@ -351,13 +358,13 @@ def _render_full_report(r: pd.Series):
     _render_pe_discount(pe_cols[0], "vs 3-year avg", r.get("_PEDiscount3Y"))
     _render_pe_discount(pe_cols[1], "vs 5-year avg", r.get("_PEDiscount5Y"))
     _render_pe_discount(pe_cols[2], "vs 7-year avg", r.get("_PEDiscount7Y"))
-    pe_now = r.get("Price to Earnings Times")
-    pe_h3 = r.get("Historical PE 3Years")
-    pe_h5 = r.get("Historical PE 5Years")
-    pe_h7 = r.get("Historical PE 7Years")
+    pe_now = r.get("Price to Earning") or r.get("Price to Earnings Times") or 0
+    pe_h3 = r.get("Historical PE 3Years") or 0
+    pe_h5 = r.get("Historical PE 5Years") or 0
+    pe_h7 = r.get("Historical PE 7Years") or 0
     st.caption(
-        f"Current PE: **{pe_now:.1f}**  ·  3Y history: **{pe_h3 or 0:.1f}**  ·  "
-        f"5Y history: **{pe_h5 or 0:.1f}**  ·  7Y history: **{pe_h7 or 0:.1f}**"
+        f"Current PE: **{pe_now:.1f}** (Screener's 'Price to Earning' column) · "
+        f"3Y history: **{pe_h3:.1f}** · 5Y history: **{pe_h5:.1f}** · 7Y history: **{pe_h7:.1f}**"
     )
 
     # ── Profitability trend ────────────────────────────────────────

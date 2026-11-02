@@ -114,7 +114,11 @@ def rate_row(row: dict, enrichment: dict) -> CSVRating:
     short_pts = max(0, min(100, short_pts + 22))
 
     # ── Long-term (fundamentals + PE discount vs history) ───────────
-    pe = _f(row.get("Price to Earnings Times")) or _f(row.get("Price to Earning"))
+    # Screener's canonical PE field is "Price to Earning" (col 17 in your export).
+    # "Price to Earnings Times" (col 8) is a *multiple* field — PE relative to some
+    # base — not the raw trailing PE. For Nykaa (FSN), col 8 = 59.5 but the real PE
+    # is 379.1. Always trust "Price to Earning" first.
+    pe = _f(row.get("Price to Earning")) or _f(row.get("Price to Earnings Times"))
     pe_h3 = _f(row.get("Historical PE 3Years"))
     pe_h5 = _f(row.get("Historical PE 5Years"))
     pe_h7 = _f(row.get("Historical PE 7Years"))
