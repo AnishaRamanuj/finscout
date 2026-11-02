@@ -19,6 +19,7 @@ from app.db import SessionLocal, Company, Score, Financials, WhyNow, Deal
 from app.scoring.verdict import verdict_for
 from app.scoring.peers import peer_table, sector_median
 from app.scoring.upside import compute_upside
+from app.data.live_quote import get_live_quote, format_volume
 from app.ui._styles import inject, badge
 from app.agents.explainer import explain_ratio
 
@@ -115,6 +116,9 @@ def render():
         if len(parts) > 1:
             st.markdown(f'<div class="fs-risk"><b>Risk:</b> {parts[1].strip()}</div>', unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
+
+    # --- Live Market Activity ---------------------------------------------
+    _live_market_section(company, ticker)
 
     # --- Chart --------------------------------------------------------------
     _price_chart(fin, ticker)
@@ -222,6 +226,50 @@ def render():
         with st.expander("🔧 Raw data (for the curious)"):
             qi = fin.raw.get("info", {}) or {}
             st.json({k: v for k, v in qi.items() if v is not None})
+
+
+def _live_market_section(company, ticker: str):
+    """Live price + volume widget — cached 60 s, with a manual refresh button."""
+    yf_symbol = company.yf_symbol or f"{ticker}.NS"
+
+    header_l, header_r = st.columns([5, 1])
+    with header_l:
+        st.markdown("### 📡 Live Market Activity")
+    with header_r:
+        refresh = st.button("🔄 Refresh", key=f"refresh_{ticker}", use_container_width=True)
+
+    with st.spinner("Fetching live quote…"):
+        q = get_live_quote(yf_symbol, ticker, bust=refresh)
+
+    if not q:
+        st.caption("Live data unavailable right now (markets closed or source throttled).")
+        return
+
+    cols = st.columns(4)
+    _stat(cols[0], "Live price",
+          f"₹{q.price:,.2f}" if q.price else "—")
+    _stat(cols[1], "Volume today",
+          format_volume(q.volume_today))
+    _stat(cols[2], "30-day avg",
+          format_volume(q.avg_volume_30d))
+    _stat(cols[3], "Volume ratio",
+          f"{q.volume_surge:.2f}×" if q.volume_surge else "—",
+          delta=False)
+
+    if q.volume_surge is not None and q.volume_surge >= 2.0:
+        st.success(
+            f"🚨 **Volume surge detected** — trading at **{q.volume_surge:.1f}× normal volume** today. "
+            "Often signals an incoming move (news, breakout, institutional interest)."
+        )
+    elif q.volume_surge is not None and q.volume_surge >= 1.5:
+        st.info(f"👀 Volume elevated at **{q.volume_surge:.1f}× normal**. Worth watching.")
+    elif q.volume_surge is not None and q.volume_surge < 0.6:
+        st.caption(f"Quiet session — only {q.volume_surge:.1f}× normal volume.")
+
+    footer = f"Source: **{q.source}** · updated {q.last_update.strftime('%H:%M:%S')}"
+    if q.day_high and q.day_low:
+        footer += f" · intraday range ₹{q.day_low:,.2f}–₹{q.day_high:,.2f}"
+    st.caption(footer)
 
 
 def _price_chart(fin, ticker):
