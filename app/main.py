@@ -10,7 +10,7 @@ if str(_ROOT) not in sys.path:
 import streamlit as st
 
 from app.config import settings
-from app.ui import discover, portfolio, deep_dive, screener
+from app.ui import discover, portfolio, deep_dive, screener, csv_rate
 from app.db import init_db
 
 st.set_page_config(
@@ -30,7 +30,7 @@ if "fs_tab" not in st.session_state:
 
 tab = st.sidebar.radio(
     " ",
-    ["This Week's Picks", "Find Stocks", "My Money", "Research a Stock"],
+    ["This Week's Picks", "Find Stocks", "Rate my CSV", "My Money", "Research a Stock"],
     key="fs_tab",
     label_visibility="collapsed",
 )
@@ -47,6 +47,8 @@ if tab == "This Week's Picks":
     discover.render()
 elif tab == "Find Stocks":
     screener.render()
+elif tab == "Rate my CSV":
+    csv_rate.render()
 elif tab == "My Money":
     portfolio.render()
 else:
