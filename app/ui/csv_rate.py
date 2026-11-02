@@ -115,6 +115,9 @@ def _rate_all(df_user: pd.DataFrame) -> pd.DataFrame:
             "macd_fast_trend": mf.trend if mf else "neutral",
             "chart_score": pattern.score,
             "pattern_tags": pattern.pattern_tags,
+            "adx14": pattern.adx14,
+            "obv_slope_pct": pattern.obv_slope_pct,
+            "supertrend_dir": pattern.supertrend_dir,
             "volume_surge": None,
         }
 
@@ -134,6 +137,17 @@ def _rate_all(df_user: pd.DataFrame) -> pd.DataFrame:
         rec["_Pattern"] = pattern.label
         rec["_PatternTags"] = ", ".join(PATTERN_LABEL.get(t, t) for t in pattern.pattern_tags)
         rec["_RSI14"] = pattern.rsi14
+        rec["_ADX14"] = pattern.adx14
+        rec["_BollingerPctB"] = pattern.bollinger_pct_b
+        rec["_ROC20"] = pattern.roc20
+        rec["_OBVSlope"] = pattern.obv_slope_pct
+        rec["_Supertrend"] = pattern.supertrend_dir
+        rec["_PEDiscount3Y"] = rating.pe_discount_3y
+        rec["_PEDiscount5Y"] = rating.pe_discount_5y
+        rec["_PEDiscount7Y"] = rating.pe_discount_7y
+        rec["_OpProfitQoQ"] = rating.op_profit_qoq
+        rec["_NetProfitYoY"] = rating.net_profit_yoy
+        rec["_ROEChange"] = rating.roe_change
         rec["_Reasons"] = " · ".join(rating.bullets)
         rec["_InDB"] = company is not None
         out_rows.append(rec)
@@ -142,34 +156,34 @@ def _rate_all(df_user: pd.DataFrame) -> pd.DataFrame:
 
 
 def _render_filters_and_table(rated: pd.DataFrame):
-    st.markdown("### Filters")
-    f1, f2, f3, f4 = st.columns(4)
-    with f1:
-        verdicts = ["Strong Buy", "Buy", "Hold", "Watch", "Avoid"]
-        chosen_verdicts = st.multiselect(
-            "Rating", verdicts, default=["Strong Buy", "Buy"],
-        )
-    with f2:
-        industries = sorted(rated["Industry"].dropna().unique()) if "Industry" in rated.columns else []
-        chosen_industries = st.multiselect("Industry", industries, default=[])
-    with f3:
-        max_pe = int(rated["Price to Earnings Times"].dropna().max()) if "Price to Earnings Times" in rated.columns else 300
-        pe_range = st.slider("PE range", 0, min(max_pe, 300), (0, min(max_pe, 150)))
-    with f4:
-        min_combined = st.slider("Minimum combined rating", 0, 100, 50)
+    with st.expander("🔎 Filters (no defaults — set what you want)", expanded=False):
+        f1, f2, f3, f4 = st.columns(4)
+        with f1:
+            verdicts = ["Strong Buy", "Buy", "Hold", "Watch", "Avoid"]
+            chosen_verdicts = st.multiselect("Rating", verdicts, default=[])
+        with f2:
+            industries = sorted(rated["Industry"].dropna().unique()) if "Industry" in rated.columns else []
+            chosen_industries = st.multiselect("Industry", industries, default=[])
+        with f3:
+            max_pe = int(rated["Price to Earnings Times"].dropna().max()) if "Price to Earnings Times" in rated.columns else 300
+            max_pe = max(max_pe, 50)
+            pe_range = st.slider("PE range", 0, min(max_pe, 500), (0, min(max_pe, 500)))
+        with f4:
+            min_combined = st.slider("Minimum combined rating", 0, 100, 0)
 
-    f5, f6 = st.columns(2)
-    with f5:
-        patterns_available = {p for row in rated["_PatternTags"].fillna("") for p in row.split(", ") if p}
-        chosen_patterns = st.multiselect(
-            "Chart pattern (any of)", sorted(patterns_available),
-            default=[],
-        )
-    with f6:
-        mom_opts = ["Strong", "Building", "Mixed", "Fading", "Quiet"]
-        chosen_mom = st.multiselect(
-            "Momentum", mom_opts, default=["Strong", "Building"],
-        )
+        f5, f6, f7 = st.columns(3)
+        with f5:
+            patterns_available = {p for row in rated["_PatternTags"].fillna("") for p in row.split(", ") if p}
+            chosen_patterns = st.multiselect("Chart pattern (any of)", sorted(patterns_available), default=[])
+        with f6:
+            mom_opts = ["Strong", "Building", "Mixed", "Fading", "Quiet"]
+            chosen_mom = st.multiselect("Momentum", mom_opts, default=[])
+        with f7:
+            min_pe_discount = st.slider(
+                "Minimum avg PE discount vs its own history (%)",
+                -100, 100, -100,
+                help="How much cheaper the current PE is vs the stock's own 3/5/7-year averages. 0 = at history, 25 = materially cheaper.",
+            )
 
     df = rated.copy()
     if chosen_verdicts:
@@ -178,11 +192,15 @@ def _render_filters_and_table(rated: pd.DataFrame):
         df = df[df["Industry"].isin(chosen_industries)]
     if "Price to Earnings Times" in df.columns:
         df = df[df["Price to Earnings Times"].between(pe_range[0], pe_range[1], inclusive="both")]
-    df = df[df["_Combined"] >= min_combined]
+    if min_combined > 0:
+        df = df[df["_Combined"] >= min_combined]
     if chosen_mom:
         df = df[df["_Momentum"].isin(chosen_mom)]
     if chosen_patterns:
         df = df[df["_PatternTags"].fillna("").apply(lambda s: any(p in s for p in chosen_patterns))]
+    if min_pe_discount > -100:
+        avg_disc = df[["_PEDiscount3Y", "_PEDiscount5Y", "_PEDiscount7Y"]].mean(axis=1, skipna=True)
+        df = df[avg_disc >= min_pe_discount]
 
     df = df.sort_values("_Combined", ascending=False)
     st.caption(f"Showing **{len(df)}** of {len(rated)} rows")
@@ -198,7 +216,11 @@ def _render_filters_and_table(rated: pd.DataFrame):
     ]
     added_cols = [
         "_Rating", "_Combined", "_Short", "_Long", "_Chart",
-        "_Momentum", "_DeliveryPct", "_Pattern", "_PatternTags", "_RSI14", "_Reasons",
+        "_Momentum", "_DeliveryPct",
+        "_PEDiscount3Y", "_PEDiscount5Y", "_PEDiscount7Y",
+        "_NetProfitYoY", "_OpProfitQoQ", "_ROEChange",
+        "_RSI14", "_ADX14", "_BollingerPctB", "_ROC20", "_OBVSlope", "_Supertrend",
+        "_Pattern", "_PatternTags", "_Reasons",
     ]
     show_cols = priority_user_cols + [c for c in added_cols if c in df.columns]
 
@@ -220,7 +242,21 @@ def _render_filters_and_table(rated: pd.DataFrame):
                 "Chart", min_value=0, max_value=100, format="%d",
             ),
             "_DeliveryPct": st.column_config.NumberColumn("Delivery %", format="%.1f%%"),
-            "_RSI14": st.column_config.NumberColumn("RSI", format="%.0f"),
+            "_RSI14": st.column_config.NumberColumn("RSI(14)", format="%.0f"),
+            "_ADX14": st.column_config.NumberColumn("ADX(14)", format="%.0f",
+                                                   help="Trend strength. >25 = real trend, <15 = sideways."),
+            "_BollingerPctB": st.column_config.NumberColumn("Boll %B", format="%.2f",
+                                                           help="0 = lower band, 1 = upper band."),
+            "_ROC20": st.column_config.NumberColumn("ROC(20)", format="%+.1f%%"),
+            "_OBVSlope": st.column_config.NumberColumn("OBV slope", format="%+.1f%%",
+                                                      help="Normalised slope of On-Balance Volume over last 20 bars."),
+            "_PEDiscount3Y": st.column_config.NumberColumn("PE vs 3Y hist", format="%+.0f%%",
+                                                          help="Positive = currently cheaper than 3-year average."),
+            "_PEDiscount5Y": st.column_config.NumberColumn("PE vs 5Y hist", format="%+.0f%%"),
+            "_PEDiscount7Y": st.column_config.NumberColumn("PE vs 7Y hist", format="%+.0f%%"),
+            "_NetProfitYoY": st.column_config.NumberColumn("Net profit YoY", format="%+.0f%%"),
+            "_OpProfitQoQ": st.column_config.NumberColumn("Op profit QoQ", format="%+.0f%%"),
+            "_ROEChange": st.column_config.NumberColumn("ROE change", format="%+.1fpt"),
             "Return over 1week": st.column_config.NumberColumn("1W %", format="%+.1f%%"),
             "Return over 1month": st.column_config.NumberColumn("1M %", format="%+.1f%%"),
             "Return over 1year": st.column_config.NumberColumn("1Y %", format="%+.1f%%"),
