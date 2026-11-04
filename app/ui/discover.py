@@ -23,6 +23,7 @@ from app.scoring.verdict import verdict_for
 from app.scoring.upside import compute_upside, UpsideEstimate
 from app.scoring.peers import sector_median
 from app.scoring.momentum_lite import score_momentum, LiteSignal
+from app.scoring.tracker import MOMENTUM_GATE, snapshot_recommendation
 from app.ui._styles import inject, badge
 
 
@@ -99,6 +100,10 @@ def render():
             mom = score_momentum(company.ticker, price_1y)
             enriched.append((score, company, fin, v, est, mom))
 
+    # Momentum gate: the chart has to agree before we're willing to recommend.
+    # 60 = "Building" with conviction — we won't put a pick on the board without it.
+    enriched = [r for r in enriched if r[5].score >= MOMENTUM_GATE]
+
     if hidden_only:
         # Hidden Gem now ALSO requires momentum to not be Fading/Quiet — the
         # chart has to agree with the fundamentals before we flag it.
@@ -115,9 +120,26 @@ def render():
 
     if not enriched:
         st.warning(
-            "No hidden gems match right now. Try turning off the toggle to see the full ranked list."
+            "No picks clear the momentum ≥ "
+            f"{MOMENTUM_GATE} gate right now. Try turning off the Hidden Gems toggle, "
+            "or wait for tomorrow's nightly refresh."
         )
         return
+
+    # Snapshot every pick we actually show — idempotent per (ticker, day),
+    # so page reloads won't double-count.
+    for score, company, fin, v, est, mom in enriched:
+        snapshot_recommendation(
+            ticker=company.ticker,
+            entry_price=float(company.current_price),
+            target_price=float(est.target_price) if est.target_price else None,
+            upside_pct=float(est.upside_pct) if est.upside_pct is not None else None,
+            composite=float(score.composite) if score.composite is not None else None,
+            momentum=int(mom.score),
+            growth=float(score.growth) if score.growth is not None else None,
+            verdict=v.label,
+            reasons=list(est.reasons),
+        )
 
     for i, row in enumerate(enriched):
         _render_pick(row, hero=(i == 0))
