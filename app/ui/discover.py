@@ -53,12 +53,14 @@ def render():
     )
 
     with SessionLocal() as s:
+        # Rank across the WHOLE scored universe (Main Board + SME ≈ 2,750
+        # tickers). The verdict / momentum / hidden-gem gates below then
+        # narrow it down; the slider on this page picks the final N to show.
         rows = s.execute(
             select(Score, Company)
             .join(Company, Score.ticker == Company.ticker)
             .where(Company.current_price.isnot(None))
             .order_by(desc(Score.composite))
-            .limit(200)
         ).all()
 
     if not rows:
