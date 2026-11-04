@@ -18,7 +18,9 @@ import streamlit as st
 from sqlalchemy import desc, select
 
 from app.db import Recommendation, RecommendationPrice, Company, SessionLocal
-from app.scoring.tracker import MOMENTUM_GATE, refresh_all_open, success_rate
+from app.scoring.tracker import (
+    MOMENTUM_GATE, reanchor_misdated_opens, refresh_all_open, success_rate,
+)
 from app.ui._styles import badge, inject
 
 
@@ -42,6 +44,17 @@ def render():
         unsafe_allow_html=True,
     )
 
+    # Idempotent: on every page view, re-anchor any snapshots that were
+    # created before we started reading WhyNow history. This fixes the
+    # "entry price == today" issue for picks that were actually first
+    # recommended weeks ago.
+    fixed = reanchor_misdated_opens()
+    if fixed:
+        st.success(
+            f"Re-anchored {fixed} pick(s) to their original recommendation date "
+            "and backfilled the price history from then."
+        )
+
     c1, c2 = st.columns([3, 1])
     with c2:
         if st.button("↻ Refresh prices now", use_container_width=True):
@@ -53,8 +66,8 @@ def render():
                 st.info(f"Refreshed {refreshed} open picks. No new targets hit.")
     with c1:
         st.caption(
-            "Prices auto-sample every ~12 hours when you open this tab and click refresh. "
-            "Target hits are checked on every refresh."
+            "Entry date = the day the pick first appeared in your weekly feed. "
+            "Price history is backfilled weekly from entry, then sampled live from here on."
         )
 
     stats = success_rate()
