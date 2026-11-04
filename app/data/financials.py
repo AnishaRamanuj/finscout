@@ -1,6 +1,21 @@
 """Pulls financials, prices and insider data via yfinance (free)."""
+import math
+
 import yfinance as yf
 from tenacity import retry, stop_after_attempt, wait_exponential
+
+
+def _json_safe(v):
+    """Return a value the Postgres JSON encoder can accept.
+
+    yfinance quite happily returns NaN / Inf for today's bar when the market
+    is still open, and Postgres' JSON type rejects those tokens outright
+    ('Token "NaN" is invalid'). Convert them to None here so the whole insert
+    doesn't fail.
+    """
+    if isinstance(v, float) and not math.isfinite(v):
+        return None
+    return v
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
@@ -9,15 +24,15 @@ def fetch_company_financials(yf_symbol: str) -> dict:
     info = t.info or {}
 
     def safe_dict(df):
-        """Convert a DataFrame to a nested dict with JSON-safe (string) keys."""
+        """Convert a DataFrame to a JSON-safe nested dict (keys stringified,
+        NaN / Inf values coerced to None)."""
         try:
             if df is None or df.empty:
                 return {}
             raw = df.to_dict()
-            # Pandas index keys (dates / Timestamps) break JSON. Stringify them.
             return {
                 str(col): {
-                    (k.isoformat() if hasattr(k, "isoformat") else str(k)): v
+                    (k.isoformat() if hasattr(k, "isoformat") else str(k)): _json_safe(v)
                     for k, v in series.items()
                 }
                 for col, series in raw.items()
