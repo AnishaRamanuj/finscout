@@ -1,27 +1,34 @@
-"""Backtest tracker: snapshot every pick on the day we recommend it,
-sample the price forward, and measure how often we hit the target.
+"""Backtest tracker — user-triggered.
 
-Three public calls:
+A pick becomes a tracked recommendation only when the user explicitly
+clicks **Track this pick** on a card in Discover. We treat that click
+as 'I'm buying this today': the anchor is today, the entry price is
+today's price. From that moment on, every time the user opens the
+Track Record tab we sample the live price, update the peak, and —
+the instant the live price touches the model's target — mark the pick
+`target_hit`. Success ratio is computed only over picks the user
+chose to track.
 
-- `snapshot_recommendation(...)` — called from Discover when a pick is shown.
-  Idempotent per (ticker, same calendar day): running it twice in one day
-  does nothing the second time.
-- `refresh_all_open()` — called from the Track Record tab's refresh button.
-  For every open recommendation it fetches the latest live quote, appends a
-  price sample if the last one is stale, updates the running peak, and
-  marks the pick `target_hit` the instant the live price touches the target.
-- `success_rate()` — aggregate stats: hit rate on closed picks, average
-  days-to-target, open / hit / expired counts.
+Public calls:
+- `snapshot_recommendation(...)` — called by the Track button on a card.
+  Enforces the momentum ≥ 60 gate and is idempotent per ticker.
+- `is_tracking(ticker)` — True if an open or closed snapshot exists.
+- `refresh_all_open()` — fetches live quotes for every open pick,
+  samples once per 12h, flips to `target_hit` on first touch.
+- `delete_recommendation(rec_id)` — stop tracking one pick.
+- `clear_all()` — wipe every recommendation. Lets the user start fresh
+  after we had the auto-track bug.
+- `success_rate()` — aggregate stats.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import desc, func, select
+from sqlalchemy import func, select
 
 from app.data.live_quote import get_live_quote
-from app.db import Company, Financials, Recommendation, RecommendationPrice, SessionLocal, WhyNow
+from app.db import Company, Recommendation, RecommendationPrice, SessionLocal
 
 # Gate the chart has to clear before we are willing to recommend at all.
 MOMENTUM_GATE = 60
@@ -31,9 +38,6 @@ TARGET_WINDOW_DAYS = 365
 
 # How stale a price sample has to be before `refresh_all_open` adds a new one.
 SAMPLE_FRESHNESS = timedelta(hours=12)
-
-# Backfill cadence when we replay historical samples from Financials.raw.price_1y.
-BACKFILL_CADENCE_DAYS = 7
 
 
 @dataclass(frozen=True)
@@ -49,116 +53,12 @@ class SuccessStats:
     avg_return_open: float | None       # on open picks, last sample vs entry
 
 
-def _closes_for(ticker: str, session) -> dict[str, float]:
-    """Return the cached daily closes for `ticker` as {YYYY-MM-DD: price}."""
-    fin = session.execute(
-        select(Financials).where(Financials.ticker == ticker)
-        .order_by(desc(Financials.fetched_at)).limit(1)
-    ).scalar_one_or_none()
-    if not fin or not fin.raw:
-        return {}
-    raw = (fin.raw.get("price_1y") or {}).get("Close") or {}
-    out: dict[str, float] = {}
-    for k, v in raw.items():
-        try:
-            out[str(k)[:10]] = float(v)
-        except (TypeError, ValueError):
-            continue
-    return out
-
-
-def _price_on_or_near(closes: dict[str, float], when: datetime) -> float | None:
-    """Return the close on `when`, else the most recent close before it."""
-    if not closes:
-        return None
-    target = when.date().isoformat()
-    best_key: str | None = None
-    for k in closes.keys():
-        if k <= target and (best_key is None or k > best_key):
-            best_key = k
-    if best_key is None:
-        # `when` predates our price history — fall back to the oldest close.
-        best_key = min(closes.keys())
-    return closes[best_key]
-
-
-def _earliest_recommendation_date(ticker: str, session) -> datetime | None:
-    """Earliest WhyNow timestamp for this ticker — our proxy for 'first recommended'."""
-    return session.execute(
-        select(func.min(WhyNow.generated_at)).where(WhyNow.ticker == ticker)
-    ).scalar_one_or_none()
-
-
-def _resolve_anchor(
-    ticker: str, fallback_price: float, session
-) -> tuple[datetime, float, bool]:
-    """Pick the recommendation date + entry price.
-
-    Returns (recommended_at, entry_price, from_history). `from_history` is
-    True when we successfully recovered an earlier date and the close price
-    on that date; False means we fell back to today + today's price.
-    """
-    now = datetime.utcnow()
-    earliest = _earliest_recommendation_date(ticker, session)
-    if earliest is None or earliest >= now:
-        return now, fallback_price, False
-    closes = _closes_for(ticker, session)
-    historical = _price_on_or_near(closes, earliest)
-    if historical is None or historical <= 0:
-        return now, fallback_price, False
-    return earliest, historical, True
-
-
-def _backfill_samples(
-    rec_id: int, anchor: datetime, entry_price: float, closes: dict[str, float], session
-) -> int:
-    """Insert one sample at the anchor and ~weekly samples through to today."""
-    if not closes:
-        return 0
-    anchor_key = anchor.date().isoformat()
-    today_key = datetime.utcnow().date().isoformat()
-    inserted = 0
-    last_at: datetime | None = None
-    for d_str in sorted(closes.keys()):
-        if d_str < anchor_key or d_str > today_key:
-            continue
-        try:
-            d = datetime.fromisoformat(d_str)
-        except ValueError:
-            continue
-        if last_at is not None and (d - last_at).days < BACKFILL_CADENCE_DAYS:
-            continue
-        price = closes[d_str]
-        pct = (price / entry_price - 1) * 100 if entry_price else 0.0
-        session.add(RecommendationPrice(
-            recommendation_id=rec_id,
-            sampled_at=d,
-            price=price,
-            pct_change=round(pct, 2),
-        ))
-        last_at = d
-        inserted += 1
-    return inserted
-
-
-def _peak_in(closes: dict[str, float], anchor: datetime) -> tuple[float | None, datetime | None]:
-    """Highest close between anchor and today (inclusive), with its date."""
-    if not closes:
-        return None, None
-    anchor_key = anchor.date().isoformat()
-    today_key = datetime.utcnow().date().isoformat()
-    best_price: float | None = None
-    best_date: datetime | None = None
-    for d_str, price in closes.items():
-        if d_str < anchor_key or d_str > today_key:
-            continue
-        if best_price is None or price > best_price:
-            best_price = price
-            try:
-                best_date = datetime.fromisoformat(d_str)
-            except ValueError:
-                best_date = None
-    return best_price, best_date
+def is_tracking(ticker: str) -> bool:
+    """True if the user has already added `ticker` to Track Record."""
+    with SessionLocal() as s:
+        return s.execute(
+            select(func.count(Recommendation.id)).where(Recommendation.ticker == ticker)
+        ).scalar() > 0
 
 
 def snapshot_recommendation(
@@ -173,12 +73,11 @@ def snapshot_recommendation(
     verdict: str,
     reasons: list[str] | None = None,
 ) -> Recommendation | None:
-    """Create a snapshot row for `ticker` if we don't already have one.
+    """Add `ticker` to Track Record, 'buying' it at today's price.
 
-    The recommendation is anchored to the earliest WhyNow timestamp for
-    this ticker (the day the model first put a pick on the board), with
-    the close price on that date as the entry. If we have no earlier
-    WhyNow, we fall back to today + today's price. Idempotent per ticker.
+    Returns the Recommendation. Idempotent per ticker — a second click on
+    the same ticker returns the existing row without changes.
+    Returns None if the pick doesn't clear the momentum gate.
     """
     if momentum < MOMENTUM_GATE:
         return None
@@ -186,8 +85,6 @@ def snapshot_recommendation(
         return None
 
     with SessionLocal() as s:
-        # Idempotent per ticker: if any snapshot already exists for this
-        # ticker we keep it (the repair pass re-anchors older wrong ones).
         existing = s.execute(
             select(Recommendation).where(Recommendation.ticker == ticker)
         ).scalar_one_or_none()
@@ -196,13 +93,11 @@ def snapshot_recommendation(
             s.expunge(existing)
             return existing
 
-        anchor_dt, anchor_price, from_history = _resolve_anchor(ticker, entry_price, s)
-        closes = _closes_for(ticker, s) if from_history else {}
-
+        now = datetime.utcnow()
         rec = Recommendation(
             ticker=ticker,
-            recommended_at=anchor_dt,
-            entry_price=float(anchor_price),
+            recommended_at=now,
+            entry_price=float(entry_price),
             target_price=float(target_price) if target_price else None,
             upside_pct_at_entry=float(upside_pct) if upside_pct is not None else None,
             composite_at_entry=float(composite) if composite is not None else None,
@@ -211,81 +106,45 @@ def snapshot_recommendation(
             verdict_at_entry=verdict,
             reasons=list(reasons or []),
             status="open",
-            peak_price=float(anchor_price),
-            peak_at=anchor_dt,
-            last_checked_at=datetime.utcnow(),
+            peak_price=float(entry_price),
+            peak_at=now,
+            last_checked_at=now,
         )
         s.add(rec)
         s.flush()
 
-        # Always record the anchor as sample #1.
         s.add(RecommendationPrice(
             recommendation_id=rec.id,
-            sampled_at=anchor_dt,
-            price=float(anchor_price),
+            sampled_at=now,
+            price=float(entry_price),
             pct_change=0.0,
         ))
-        # If the anchor was in the past, backfill weekly samples through today.
-        if from_history:
-            _backfill_samples(rec.id, anchor_dt, float(anchor_price), closes, s)
-            peak_price, peak_date = _peak_in(closes, anchor_dt)
-            if peak_price is not None and peak_price > rec.peak_price:
-                rec.peak_price = peak_price
-                rec.peak_at = peak_date or rec.peak_at
-
         s.commit()
         s.refresh(rec)
         s.expunge(rec)
         return rec
 
 
-def reanchor_misdated_opens() -> int:
-    """Repair open snapshots that were anchored to today because an earlier
-    WhyNow record wasn't consulted. Moves the entry back to the earliest
-    WhyNow timestamp, rewrites the entry price to the close on that date,
-    and backfills samples. Returns the number of rows fixed.
-
-    Idempotent — running it twice on the same data does nothing the second
-    time, because the second run finds `recommended_at` already matches the
-    earliest WhyNow.
-    """
-    fixed = 0
+def delete_recommendation(rec_id: int) -> bool:
+    """Stop tracking one pick. Returns True if a row was removed."""
     with SessionLocal() as s:
-        opens = s.execute(
-            select(Recommendation).where(Recommendation.status == "open")
-        ).scalars().all()
-        for rec in opens:
-            earliest = _earliest_recommendation_date(rec.ticker, s)
-            if earliest is None:
-                continue
-            # Only re-anchor if the real recommendation predates the current entry.
-            if earliest.date() >= rec.recommended_at.date():
-                continue
-            closes = _closes_for(rec.ticker, s)
-            historical = _price_on_or_near(closes, earliest)
-            if historical is None or historical <= 0:
-                continue
+        s.query(RecommendationPrice).filter(
+            RecommendationPrice.recommendation_id == rec_id
+        ).delete(synchronize_session=False)
+        n = s.query(Recommendation).filter(Recommendation.id == rec_id).delete(
+            synchronize_session=False
+        )
+        s.commit()
+        return n > 0
 
-            rec.recommended_at = earliest
-            rec.entry_price = float(historical)
-            # Rewrite samples: drop the wrong ones, lay down fresh ones.
-            s.query(RecommendationPrice).filter(
-                RecommendationPrice.recommendation_id == rec.id
-            ).delete(synchronize_session=False)
-            s.add(RecommendationPrice(
-                recommendation_id=rec.id,
-                sampled_at=earliest,
-                price=float(historical),
-                pct_change=0.0,
-            ))
-            _backfill_samples(rec.id, earliest, float(historical), closes, s)
-            peak_price, peak_date = _peak_in(closes, earliest)
-            if peak_price is not None:
-                rec.peak_price = peak_price
-                rec.peak_at = peak_date or earliest
-            s.commit()
-            fixed += 1
-    return fixed
+
+def clear_all() -> int:
+    """Wipe every tracked pick. Returns the number removed."""
+    with SessionLocal() as s:
+        s.query(RecommendationPrice).delete(synchronize_session=False)
+        n = s.query(Recommendation).delete(synchronize_session=False)
+        s.commit()
+        return n
 
 
 def _refresh_one(rec: Recommendation, session) -> bool:
@@ -372,7 +231,6 @@ def success_rate() -> SuccessStats:
             select(func.avg(Recommendation.days_to_target))
             .where(Recommendation.status == "target_hit")
         ).scalar()
-        # Average realised return on hits.
         hit_rows = s.execute(
             select(Recommendation.entry_price, Recommendation.target_hit_price)
             .where(Recommendation.status == "target_hit",
@@ -384,7 +242,6 @@ def success_rate() -> SuccessStats:
         else:
             avg_return_hit = None
 
-        # Average mark-to-market return on open picks (using latest sample).
         open_latest = s.execute(
             select(Recommendation.id, Recommendation.entry_price)
             .where(Recommendation.status == "open")

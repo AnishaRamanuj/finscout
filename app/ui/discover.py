@@ -23,7 +23,7 @@ from app.scoring.verdict import verdict_for
 from app.scoring.upside import compute_upside, UpsideEstimate
 from app.scoring.peers import sector_median
 from app.scoring.momentum_lite import score_momentum, LiteSignal
-from app.scoring.tracker import MOMENTUM_GATE, snapshot_recommendation
+from app.scoring.tracker import MOMENTUM_GATE, is_tracking, snapshot_recommendation
 from app.ui._styles import inject, badge
 
 
@@ -126,23 +126,24 @@ def render():
         )
         return
 
-    # Snapshot every pick we actually show — idempotent per (ticker, day),
-    # so page reloads won't double-count.
-    for score, company, fin, v, est, mom in enriched:
-        snapshot_recommendation(
-            ticker=company.ticker,
-            entry_price=float(company.current_price),
-            target_price=float(est.target_price) if est.target_price else None,
-            upside_pct=float(est.upside_pct) if est.upside_pct is not None else None,
-            composite=float(score.composite) if score.composite is not None else None,
-            momentum=int(mom.score),
-            growth=float(score.growth) if score.growth is not None else None,
-            verdict=v.label,
-            reasons=list(est.reasons),
-        )
-
     for i, row in enumerate(enriched):
         _render_pick(row, hero=(i == 0))
+
+
+def _track_pick(ticker: str, entry: float, target: float | None, upside: float | None,
+                composite: float | None, momentum: int, growth: float | None,
+                verdict: str, reasons: list[str]):
+    """Button handler: 'buy' this pick today and send it to Track Record."""
+    rec = snapshot_recommendation(
+        ticker=ticker, entry_price=entry, target_price=target, upside_pct=upside,
+        composite=composite, momentum=momentum, growth=growth, verdict=verdict, reasons=reasons,
+    )
+    if rec is None:
+        st.session_state[f"track_msg_{ticker}"] = ("warning",
+            f"{ticker} is below the momentum ≥ {MOMENTUM_GATE} gate — not tracked.")
+    else:
+        st.session_state[f"track_msg_{ticker}"] = ("success",
+            f"Tracking {ticker} from today at ₹{entry:,.2f}. Open **Track Record** to monitor it.")
 
 
 def _render_pick(row, hero: bool):
@@ -203,14 +204,50 @@ def _render_pick(row, hero: bool):
     if hero:
         _chart(fin)
 
-    st.button(
-        f"See full details for {company.ticker} →",
-        key=f"dd_{company.ticker}",
-        type="primary" if hero else "secondary",
-        use_container_width=True,
-        on_click=_goto_deep_dive,
-        args=(company.ticker,),
-    )
+    # Action row: Track this pick + full details.
+    already = is_tracking(company.ticker)
+    bcol1, bcol2 = st.columns([1, 1])
+    with bcol1:
+        if already:
+            st.button(
+                f"✓ Tracking {company.ticker}",
+                key=f"tr_{company.ticker}",
+                use_container_width=True,
+                disabled=True,
+                help="Already in Track Record. Open that tab to monitor it.",
+            )
+        else:
+            st.button(
+                f"📌 Track {company.ticker} (buy at ₹{company.current_price:,.0f})",
+                key=f"tr_{company.ticker}",
+                type="primary" if hero else "secondary",
+                use_container_width=True,
+                on_click=_track_pick,
+                kwargs=dict(
+                    ticker=company.ticker,
+                    entry=float(company.current_price),
+                    target=float(est.target_price) if est.target_price else None,
+                    upside=float(est.upside_pct) if est.upside_pct is not None else None,
+                    composite=float(score.composite) if score.composite is not None else None,
+                    momentum=int(mom.score),
+                    growth=float(score.growth) if score.growth is not None else None,
+                    verdict=v.label,
+                    reasons=list(est.reasons),
+                ),
+            )
+    with bcol2:
+        st.button(
+            f"See full details for {company.ticker} →",
+            key=f"dd_{company.ticker}",
+            use_container_width=True,
+            on_click=_goto_deep_dive,
+            args=(company.ticker,),
+        )
+
+    msg = st.session_state.pop(f"track_msg_{company.ticker}", None)
+    if msg:
+        kind, text = msg
+        getattr(st, kind)(text)
 
     st.markdown("</div>", unsafe_allow_html=True)
 

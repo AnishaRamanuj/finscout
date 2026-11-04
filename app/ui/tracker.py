@@ -1,14 +1,13 @@
-"""Track Record — backtest tab.
+"""Track Record — user-tracked picks.
 
-Every pick that clears the momentum gate in Discover gets a snapshot:
-entry price, target, composite, momentum, verdict and reasons at the
-moment of recommendation. From that day on this tab records how the
-price moved, and whenever the price touches our target we mark the pick
-`target_hit` and stop sampling.
+A pick lands here only when the user clicks **Track this pick** on a
+card in Discover. That click is treated as "I'm buying this today": the
+entry date is today, the entry price is today's price, and from here
+on we sample the live price and check for target hits.
 
-The tiles at the top are the honest scoreboard: hit rate on closed
-picks, average days-to-target, average return on hit, and the running
-mark-to-market on open picks.
+Tiles are the honest scoreboard across every pick the user chose to
+track — hit rate on closed picks, average days to target, average return
+on hit, mark-to-market on open picks.
 """
 from __future__ import annotations
 
@@ -19,7 +18,7 @@ from sqlalchemy import desc, select
 
 from app.db import Recommendation, RecommendationPrice, Company, SessionLocal
 from app.scoring.tracker import (
-    MOMENTUM_GATE, reanchor_misdated_opens, refresh_all_open, success_rate,
+    MOMENTUM_GATE, clear_all, delete_recommendation, refresh_all_open, success_rate,
 )
 from app.ui._styles import badge, inject
 
@@ -37,25 +36,15 @@ def render():
     st.markdown('<div class="fs-header-title">Track Record</div>', unsafe_allow_html=True)
     st.markdown(
         '<div class="fs-header-sub">'
-        f"Every pick we put on the board clears a momentum ≥ {MOMENTUM_GATE} gate. "
-        "From the day of the recommendation we log the entry price and the model's target, "
-        "then track the price forward until the target is hit or the pick expires."
+        f"Only picks you clicked **Track** in This Week's AI Picks land here. "
+        f"Each pick also has to clear the momentum ≥ {MOMENTUM_GATE} gate. "
+        "We treat the day you tracked it as the day you bought it, and from there "
+        "every refresh samples the live price and checks the model's target."
         '</div>',
         unsafe_allow_html=True,
     )
 
-    # Idempotent: on every page view, re-anchor any snapshots that were
-    # created before we started reading WhyNow history. This fixes the
-    # "entry price == today" issue for picks that were actually first
-    # recommended weeks ago.
-    fixed = reanchor_misdated_opens()
-    if fixed:
-        st.success(
-            f"Re-anchored {fixed} pick(s) to their original recommendation date "
-            "and backfilled the price history from then."
-        )
-
-    c1, c2 = st.columns([3, 1])
+    c1, c2, c3 = st.columns([2, 1, 1])
     with c2:
         if st.button("↻ Refresh prices now", use_container_width=True):
             with st.spinner("Fetching live quotes for open picks…"):
@@ -64,18 +53,27 @@ def render():
                 st.success(f"Refreshed {refreshed} open picks — {hits} hit target 🎯")
             else:
                 st.info(f"Refreshed {refreshed} open picks. No new targets hit.")
+    with c3:
+        with st.popover("🧹 Reset all", use_container_width=True):
+            st.caption(
+                "Use this once if you want to wipe the picks that were tracked "
+                "automatically before this update."
+            )
+            if st.button("Delete every tracked pick", type="primary"):
+                removed = clear_all()
+                st.success(f"Removed {removed} tracked picks. Start fresh from Discover.")
+                st.rerun()
     with c1:
         st.caption(
-            "Entry date = the day the pick first appeared in your weekly feed. "
-            "Price history is backfilled weekly from entry, then sampled live from here on."
+            "Entry = the price on the day you clicked Track. Peak and current update on refresh."
         )
 
     stats = success_rate()
 
     if stats.total == 0:
         st.info(
-            "No recommendations tracked yet. Open **This Week's Picks** — every pick that "
-            "clears the momentum gate gets snapshotted here automatically."
+            "No tracked picks yet. Open **This Week's AI Picks** and click **📌 Track**"
+            " on any card you'd like to monitor."
         )
         return
 
@@ -268,6 +266,15 @@ def _render_detail(rec_id: int):
     else:
         days = (pd.Timestamp.utcnow().to_pydatetime().replace(tzinfo=None) - rec.recommended_at).days
         cols[4].metric("Days open", str(days))
+
+    if st.button(
+        f"✕ Stop tracking {rec.ticker}",
+        key=f"stop_{rec.id}",
+        help="Removes this pick and its price samples from Track Record.",
+    ):
+        delete_recommendation(rec.id)
+        st.success(f"Stopped tracking {rec.ticker}.")
+        st.rerun()
 
     _render_chart(rec, samples)
 
