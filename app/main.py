@@ -10,7 +10,8 @@ if str(_ROOT) not in sys.path:
 import streamlit as st
 
 from app.config import settings
-from app.ui import discover, portfolio, deep_dive, screener, csv_rate, tracker
+from app.ui import discover, deep_dive, screener, csv_rate, tracker
+from app.ui._styles import inject_sidebar
 from app.db import init_db
 
 st.set_page_config(
@@ -21,37 +22,54 @@ st.set_page_config(
 )
 
 init_db()
+inject_sidebar()
 
-st.sidebar.title("🔍 FinScout")
-st.sidebar.caption("AI-powered stock discovery")
+TABS = [
+    ("🌟", "This Week's Picks", "Hand-picked stocks for this week"),
+    ("🔎", "Find Stocks", "Filter the full universe"),
+    ("📄", "Rate my CSV", "Score a Screener.in CSV"),
+    ("📈", "Research a Stock", "Full breakdown of any ticker"),
+    ("🏆", "Track Record", "How your tracked picks are doing"),
+]
+
+st.sidebar.markdown(
+    "<div class='fs-brand'>🔍 <span>FinScout</span></div>"
+    "<div class='fs-brand-sub'>AI-powered stock discovery</div>",
+    unsafe_allow_html=True,
+)
+
+_LABELS = [label for _, label, _ in TABS]
+_ICON = {label: icon for icon, label, _ in TABS}
 
 if "fs_tab" not in st.session_state:
-    st.session_state.fs_tab = "This Week's Picks"
+    st.session_state.fs_tab = _LABELS[0]
+# Fallback: another file deep-linked somewhere we no longer list
+if st.session_state.fs_tab not in _LABELS and st.session_state.fs_tab != "Research a Stock":
+    st.session_state.fs_tab = _LABELS[0]
 
-tab = st.sidebar.radio(
+selected_label = st.sidebar.radio(
     " ",
-    ["This Week's Picks", "Find Stocks", "Rate my CSV", "My Money", "Research a Stock", "Track Record"],
+    _LABELS,
     key="fs_tab",
+    format_func=lambda s: f"{_ICON.get(s, '📈')}  {s}",
     label_visibility="collapsed",
 )
 
-st.sidebar.markdown("---")
-st.sidebar.caption("Not sure where to start? Try **This Week's Picks** or **My Money → Build me a portfolio**.")
-st.sidebar.markdown("---")
+st.sidebar.markdown("<div class='fs-nav-hint'>New here? Start with <b>This Week's Picks</b>.</div>", unsafe_allow_html=True)
+
+st.sidebar.markdown("<div class='fs-sidebar-divider'></div>", unsafe_allow_html=True)
 if settings.llm_provider == "ollama":
-    st.sidebar.caption(f"Powered by local AI (Ollama · {settings.ollama_reasoning_model})")
+    st.sidebar.caption(f"Powered by local AI · Ollama ({settings.ollama_reasoning_model})")
 else:
     st.sidebar.caption(f"Powered by {settings.model_reasoning}")
 
-if tab == "This Week's Picks":
+if selected_label == "This Week's Picks":
     discover.render()
-elif tab == "Find Stocks":
+elif selected_label == "Find Stocks":
     screener.render()
-elif tab == "Rate my CSV":
+elif selected_label == "Rate my CSV":
     csv_rate.render()
-elif tab == "My Money":
-    portfolio.render()
-elif tab == "Track Record":
+elif selected_label == "Track Record":
     tracker.render()
 else:
     deep_dive.render()

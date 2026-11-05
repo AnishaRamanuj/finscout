@@ -13,7 +13,7 @@ from __future__ import annotations
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from sqlalchemy import select, desc
+from sqlalchemy import func, select, desc
 
 from app.db import SessionLocal, Company, Score, Financials, WhyNow, Deal
 from app.scoring.verdict import verdict_for
@@ -49,12 +49,24 @@ def render():
 
     with SessionLocal() as s:
         all_tickers = [t for (t,) in s.execute(select(Company.ticker).order_by(Company.ticker)).all()]
+        scored_count = s.execute(select(func.count(Score.ticker))).scalar() or 0
+        financials_count = s.execute(
+            select(func.count(func.distinct(Financials.ticker)))
+        ).scalar() or 0
     if not all_tickers:
         st.markdown('<div class="fs-header-title">Research a Stock</div>', unsafe_allow_html=True)
         st.info("No companies ingested yet. Run `python -m app.jobs.nightly 500 nifty500`.")
         return
 
     st.markdown('<div class="fs-header-title">Research a Stock</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="fs-header-sub">'
+        f'Searching across <b>{len(all_tickers):,}</b> stocks in your database · '
+        f'<b>{scored_count:,}</b> with model scores · '
+        f'<b>{financials_count:,}</b> with financials cached.'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
     pre = st.session_state.get("fs_selected_ticker")
     if pre and pre in all_tickers:

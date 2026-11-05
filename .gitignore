@@ -29,3 +29,7 @@ pgdata/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local runtime output
+logs/
+interview-prep.md
