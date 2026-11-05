@@ -1,63 +1,176 @@
-"""Shared Streamlit CSS — one place to tune the whole look."""
+"""Shared Streamlit CSS — one place to tune the whole look.
+
+Design goals: light, calm, readable. A single teal accent, soft neutrals,
+plenty of breathing room, and cards that read at a glance.
+"""
 CSS = """
 <style>
-  /* Tighten the main padding */
-  .block-container { padding-top: 1.5rem; padding-bottom: 3rem; max-width: 1300px; }
+  /* ---------- Palette (available as CSS vars) ---------- */
+  :root {
+    --fs-accent:        #0ea5a4;   /* teal */
+    --fs-accent-soft:   rgba(14, 165, 164, 0.10);
+    --fs-accent-border: rgba(14, 165, 164, 0.35);
+    --fs-ink:           #0f172a;
+    --fs-ink-soft:      #475569;
+    --fs-ink-muted:     #94a3b8;
+    --fs-surface:       #ffffff;
+    --fs-surface-alt:   #f8fafc;
+    --fs-border:        #e2e8f0;
+    --fs-good:          #16a34a;
+    --fs-bad:           #dc2626;
+    --fs-warn:          #d97706;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fs-ink:         #f1f5f9;
+      --fs-ink-soft:    #cbd5e1;
+      --fs-ink-muted:   #94a3b8;
+      --fs-surface:     #0f172a;
+      --fs-surface-alt: #111c2e;
+      --fs-border:      rgba(148, 163, 184, 0.18);
+    }
+  }
 
-  /* Verdict badges */
+  /* ---------- Layout ---------- */
+  .block-container {
+    padding-top: 1.25rem;
+    padding-bottom: 3rem;
+    max-width: 1280px;
+  }
+
+  /* ---------- Headers ---------- */
+  .fs-header-title {
+    font-size: 30px;
+    font-weight: 700;
+    color: var(--fs-ink);
+    letter-spacing: -0.3px;
+    margin: 4px 0 4px 0;
+  }
+  .fs-header-sub {
+    color: var(--fs-ink-soft);
+    font-size: 15px;
+    margin-bottom: 18px;
+  }
+
+  /* ---------- Cards ---------- */
+  .fs-card {
+    border: 1px solid var(--fs-border);
+    border-radius: 16px;
+    padding: 22px 26px;
+    margin-bottom: 20px;
+    background: var(--fs-surface);
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    transition: box-shadow 0.15s ease, border-color 0.15s ease;
+  }
+  .fs-card:hover {
+    border-color: var(--fs-accent-border);
+    box-shadow: 0 4px 16px rgba(14, 165, 164, 0.08);
+  }
+  .fs-hero {
+    border: 1px solid var(--fs-accent-border);
+    background: linear-gradient(180deg, var(--fs-accent-soft), var(--fs-surface));
+  }
+
+  /* ---------- Verdict / signal badges ---------- */
   .fs-badge {
     display: inline-block;
     padding: 4px 12px;
     border-radius: 999px;
     font-weight: 600;
-    font-size: 13px;
-    letter-spacing: 0.3px;
+    font-size: 12px;
+    letter-spacing: 0.4px;
     text-transform: uppercase;
   }
 
-  /* Pick card */
-  .fs-card {
-    border: 1px solid rgba(255,255,255,0.08);
-    border-radius: 14px;
-    padding: 20px 24px;
-    margin-bottom: 20px;
-    background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01));
-  }
-
-  .fs-hero {
-    border: 1px solid rgba(37,99,235,0.35);
-    background: linear-gradient(180deg, rgba(37,99,235,0.09), rgba(255,255,255,0.02));
-  }
-
+  /* ---------- Why-Now paragraph ---------- */
   .fs-why {
     font-size: 15.5px;
-    line-height: 1.55;
-    color: #e5e7eb;
-    margin: 10px 0 14px 0;
+    line-height: 1.6;
+    color: var(--fs-ink);
+    margin: 12px 0 14px 0;
   }
-
   .fs-risk {
-    color: #fbbf24;
+    color: var(--fs-warn);
     font-size: 13.5px;
     margin-top: 6px;
   }
 
-  .fs-stat { color: #9ca3af; font-size: 12px; text-transform: uppercase; letter-spacing: 0.4px; }
-  .fs-value { color: #f3f4f6; font-size: 20px; font-weight: 600; margin-top: 2px; }
-  .fs-delta-up { color: #22c55e; font-size: 13px; }
-  .fs-delta-down { color: #ef4444; font-size: 13px; }
+  /* ---------- Stat tiles ---------- */
+  .fs-stat {
+    color: var(--fs-ink-muted);
+    font-size: 11.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+  }
+  .fs-value {
+    color: var(--fs-ink);
+    font-size: 21px;
+    font-weight: 700;
+    margin-top: 4px;
+    letter-spacing: -0.2px;
+  }
+  .fs-delta-up   { color: var(--fs-good); font-size: 13px; font-weight: 600; }
+  .fs-delta-down { color: var(--fs-bad);  font-size: 13px; font-weight: 600; }
 
-  .fs-header-title { font-size: 28px; font-weight: 700; margin-bottom: 2px; }
-  .fs-header-sub { color: #9ca3af; font-size: 14px; margin-bottom: 16px; }
-
+  /* ---------- Help / info banner ---------- */
   .fs-help-box {
-    background: rgba(37,99,235,0.08);
-    border-left: 3px solid #2563eb;
+    background: var(--fs-accent-soft);
+    border-left: 3px solid var(--fs-accent);
     padding: 12px 16px;
-    border-radius: 6px;
+    border-radius: 8px;
     margin-bottom: 20px;
     font-size: 14px;
-    color: #d1d5db;
+    color: var(--fs-ink);
+  }
+
+  /* ---------- Sidebar navigation ---------- */
+  .fs-brand {
+    font-size: 24px;
+    font-weight: 800;
+    letter-spacing: -0.4px;
+    color: var(--fs-ink);
+    margin-top: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .fs-brand span { color: var(--fs-accent); }
+  .fs-brand-sub {
+    color: var(--fs-ink-muted);
+    font-size: 12.5px;
+    margin: 2px 0 20px 0;
+  }
+  .fs-nav-hint {
+    margin-top: 14px;
+    font-size: 12.5px;
+    color: var(--fs-ink-muted);
+    padding: 10px 12px;
+    background: var(--fs-accent-soft);
+    border-radius: 8px;
+    line-height: 1.45;
+  }
+  .fs-sidebar-divider {
+    height: 1px;
+    background: var(--fs-border);
+    margin: 18px 0 10px 0;
+  }
+
+  /* Pretty up the radio items in the sidebar */
+  section[data-testid="stSidebar"] div[role="radiogroup"] > label {
+    border-radius: 10px;
+    padding: 6px 10px;
+    margin: 2px 0;
+    transition: background 0.15s ease;
+  }
+  section[data-testid="stSidebar"] div[role="radiogroup"] > label:hover {
+    background: var(--fs-accent-soft);
+  }
+
+  /* Primary Streamlit buttons pick up the accent */
+  button[kind="primary"] {
+    background-color: var(--fs-accent) !important;
+    border-color: var(--fs-accent) !important;
   }
 </style>
 """
@@ -65,6 +178,12 @@ CSS = """
 
 def inject():
     """Call at the top of each page."""
+    import streamlit as st
+    st.markdown(CSS, unsafe_allow_html=True)
+
+
+def inject_sidebar():
+    """Call once from main — makes the sidebar styles available globally."""
     import streamlit as st
     st.markdown(CSS, unsafe_allow_html=True)
 
