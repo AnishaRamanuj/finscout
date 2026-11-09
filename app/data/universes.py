@@ -107,7 +107,10 @@ _STATIC: dict[str, frozenset[str]] = {
     "microcap250": frozenset(),    # resolved at call time
     "nifty500": frozenset(),       # resolved at call time
     "totalmarket": frozenset(),    # ~750 investable stocks
-    "all": frozenset(),            # empty = no filter
+    "all": frozenset(),            # empty = no filter → every ticker
+                                   # fetch_nse_tickers returns (Main Board +
+                                   # Emerge SME), so 'all' is the full
+                                   # ~2,750-ticker listed universe.
 }
 
 

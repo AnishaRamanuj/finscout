@@ -94,6 +94,43 @@ class Deal(Base):
     captured_at = Column(DateTime, default=datetime.utcnow)
 
 
+class Recommendation(Base):
+    """A pick snapshot — frozen scores and prices at the moment we recommended it."""
+    __tablename__ = "recommendations"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ticker = Column(String, index=True)
+    recommended_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    # Snapshot at entry
+    entry_price = Column(Float)
+    target_price = Column(Float)
+    upside_pct_at_entry = Column(Float)
+    composite_at_entry = Column(Float)
+    momentum_at_entry = Column(Integer)
+    growth_at_entry = Column(Float)
+    verdict_at_entry = Column(String)          # "Strong Pick" / "Pick" / "Hidden Gem" / ...
+    reasons = Column(JSON, default=list)
+
+    # Outcome tracking
+    status = Column(String, default="open", index=True)   # open | target_hit | expired
+    target_hit_at = Column(DateTime, nullable=True)
+    target_hit_price = Column(Float, nullable=True)
+    days_to_target = Column(Integer, nullable=True)
+    peak_price = Column(Float, nullable=True)
+    peak_at = Column(DateTime, nullable=True)
+    last_checked_at = Column(DateTime, nullable=True)
+
+
+class RecommendationPrice(Base):
+    """Daily-ish price samples captured for each recommendation after entry."""
+    __tablename__ = "recommendation_prices"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    recommendation_id = Column(Integer, index=True)
+    sampled_at = Column(DateTime, default=datetime.utcnow)
+    price = Column(Float)
+    pct_change = Column(Float)                 # vs entry price
+
+
 engine = create_engine(settings.database_url, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
