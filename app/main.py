@@ -11,7 +11,7 @@ import streamlit as st
 
 from app.config import settings
 from app.ui import discover, deep_dive, screener, csv_rate, tracker
-from app.ui._styles import inject_sidebar
+from app.ui._styles import inject as inject_styles
 from app.db import init_db
 
 st.set_page_config(
@@ -22,7 +22,7 @@ st.set_page_config(
 )
 
 init_db()
-inject_sidebar()
+inject_styles()
 
 TABS = [
     ("🌟", "This Week's Picks", "Hand-picked stocks for this week"),

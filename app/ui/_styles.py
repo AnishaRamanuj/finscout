@@ -177,13 +177,7 @@ CSS = """
 
 
 def inject():
-    """Call at the top of each page."""
-    import streamlit as st
-    st.markdown(CSS, unsafe_allow_html=True)
-
-
-def inject_sidebar():
-    """Call once from main — makes the sidebar styles available globally."""
+    """Call at the top of each page (and once from main for sidebar styles)."""
     import streamlit as st
     st.markdown(CSS, unsafe_allow_html=True)
 
